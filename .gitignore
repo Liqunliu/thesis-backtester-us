@@ -42,3 +42,4 @@ strategies/*/backtest/prompts/
 strategies/*/backtest/reports/
 strategies/*/backtest/logs/
 strategies/*/backtest/screen_backtest_*
+.agents/skills/pua/
