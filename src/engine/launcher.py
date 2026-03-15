@@ -4,55 +4,207 @@
 统一入口，加载策略配置后 dispatch 到对应模块。
 
 用法:
-    python -m src.engine.launcher strategies/v556_value/strategy.yaml screen 2024-06-30
-    python -m src.engine.launcher strategies/v556_value/strategy.yaml screen 2024-06-30 --top 30
-    python -m src.engine.launcher strategies/v556_value/strategy.yaml analyze 601288.SH 2024-06-30
-    python -m src.engine.launcher strategies/v556_value/strategy.yaml analyze 601288.SH 2024-06-30 --blind
-    python -m src.engine.launcher strategies/v556_value/strategy.yaml blind-generate
-    python -m src.engine.launcher strategies/v556_value/strategy.yaml blind-report
-    python -m src.engine.launcher strategies/v556_value/strategy.yaml parse-template
+    # 策略命令 (需要 strategy.yaml)
+    python -m src.engine.launcher strategies/v6_value/strategy.yaml screen 2024-06-30
+    python -m src.engine.launcher strategies/v6_value/strategy.yaml analyze 601288.SH 2024-06-30
+    python -m src.engine.launcher strategies/v6_value/strategy.yaml agent-analyze 601288.SH 2024-06-30
+
+    # 数据命令 (不需要 strategy.yaml)
+    python -m src.engine.launcher data update-daily
+    python -m src.engine.launcher data update-indicator
+    python -m src.engine.launcher data update-financials 601288.SH 000001.SZ
+    python -m src.engine.launcher data update-factors
+    python -m src.engine.launcher data daily-update
+    python -m src.engine.launcher data status
 """
 import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# 加载项目根目录 .env
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from .config import StrategyConfig
+
+# 数据管理命令 (不需要策略配置)
+_DATA_COMMANDS = {
+    'update-daily', 'update-indicator', 'update-financials',
+    'update-factors', 'update-disclosure', 'daily-update',
+    'full-update', 'init-basic', 'init-market', 'status',
+    'recalc-factors',
+    'update-ts-factors', 'recalc-ts-factors',
+}
 
 
 def main():
     if len(sys.argv) < 3:
-        print("用法: python -m src.engine.launcher <strategy.yaml> <command> [args...]")
-        print()
-        print("命令:")
-        print("  screen <cutoff_date> [--top N]        量化筛选")
-        print("  analyze <ts_code> <cutoff_date>       单股分析（生成prompt）")
-        print("  blind-generate                        批量生成盲测prompt")
-        print("  blind-report                          汇总盲测结果报告")
-        print("  parse-template                        解析投资模版为章节")
-        print()
-        print("示例:")
-        print("  python -m src.engine.launcher strategies/v556_value/strategy.yaml screen 2024-06-30")
+        _print_usage()
         sys.exit(1)
 
-    yaml_path = sys.argv[1]
-    command = sys.argv[2]
-    extra_args = sys.argv[3:]
-
-    config = StrategyConfig.from_yaml(yaml_path)
-    print(f"策略: {config.name} (v{config.version})")
-    print()
-
-    if command == "screen":
-        _cmd_screen(config, extra_args)
-    elif command == "analyze":
-        _cmd_analyze(config, extra_args)
-    elif command == "blind-generate":
-        _cmd_blind_generate(config)
-    elif command == "blind-report":
-        _cmd_blind_report(config)
-    elif command == "parse-template":
-        _cmd_parse_template(config)
+    # 判断是数据命令还是策略命令
+    if sys.argv[1] == 'data':
+        command = sys.argv[2]
+        extra_args = sys.argv[3:]
+        if command not in _DATA_COMMANDS:
+            print(f"未知数据命令: {command}")
+            _print_usage()
+            sys.exit(1)
+        _dispatch_data(command, extra_args)
     else:
-        print(f"未知命令: {command}")
+        yaml_path = sys.argv[1]
+        command = sys.argv[2]
+        extra_args = sys.argv[3:]
+
+        config = StrategyConfig.from_yaml(yaml_path)
+        print(f"策略: {config.name} (v{config.version})")
+        print()
+        _dispatch_strategy(config, command, extra_args)
+
+
+def _print_usage():
+    print("用法:")
+    print("  python -m src.engine.launcher <strategy.yaml> <command> [args...]")
+    print("  python -m src.engine.launcher data <command> [args...]")
+    print()
+    print("策略命令:")
+    print("  screen <cutoff_date> [--top N]        量化筛选")
+    print("  agent-analyze <ts_code> <cutoff_date> Agent驱动的自动分析")
+    print()
+    print("数据命令:")
+    print("  data update-daily [start] [end]       增量更新日线行情")
+    print("  data update-indicator [start] [end]   增量更新每日指标")
+    print("  data update-financials [codes...]     批量更新财报 (无参数=全市场增量)")
+    print("  data update-factors [start] [end]     预计算截面因子")
+    print("  data recalc-factors                   全量重算截面因子")
+    print("  data update-ts-factors [codes...]     增量计算时序因子")
+    print("  data recalc-ts-factors                全量重算时序因子")
+    print("  data update-disclosure                更新披露日期")
+    print("  data daily-update                     每日增量 (行情+指标+因子)")
+    print("  data init-basic                       初始化基础数据")
+    print("  data init-market [start_date]         初始化行情数据")
+    print("  data full-update [start_date] [codes] 全量更新")
+    print("  data status                           查看数据状态")
+    print()
+    print("示例:")
+    print("  python -m src.engine.launcher data daily-update")
+    print("  python -m src.engine.launcher data update-financials 601288.SH 000001.SZ")
+    print("  python -m src.engine.launcher strategies/v6_value/strategy.yaml screen 2024-06-30")
+
+
+def _dispatch_strategy(config: StrategyConfig, command: str, args: list):
+    if command == "screen":
+        _cmd_screen(config, args)
+    elif command == "agent-analyze":
+        _cmd_agent_analyze(config, args)
+    else:
+        print(f"未知策略命令: {command}")
         sys.exit(1)
+
+
+def _dispatch_data(command: str, args: list):
+    from src.data.updater import DataUpdater
+    updater = DataUpdater()
+
+    if command == 'update-daily':
+        start = args[0] if len(args) > 0 else None
+        end = args[1] if len(args) > 1 else None
+        updater.update_daily(start, end)
+
+    elif command == 'update-indicator':
+        start = args[0] if len(args) > 0 else None
+        end = args[1] if len(args) > 1 else None
+        updater.update_daily_indicator(start, end)
+
+    elif command == 'update-financials':
+        if args:
+            # 指定股票: 逐股获取全部表 (含分红/股东等补充表)
+            updater.update_financials(args)
+        else:
+            # 全市场: 按报告期截面获取核心四表 (高效)
+            updater.update_financials_by_period()
+
+    elif command == 'update-factors':
+        start = args[0] if len(args) > 0 else None
+        end = args[1] if len(args) > 1 else None
+        updater.update_factors(start, end)
+
+    elif command == 'recalc-factors':
+        from src.data.factor_store import recalc_all_factors
+        recalc_all_factors()
+
+    elif command == 'update-ts-factors':
+        from src.data.factor_store import compute_and_store_ts_factors
+        codes = args if args else None
+        compute_and_store_ts_factors(ts_codes=codes)
+
+    elif command == 'recalc-ts-factors':
+        from src.data.factor_store import recalc_all_ts_factors
+        recalc_all_ts_factors()
+
+    elif command == 'update-disclosure':
+        end_date = args[0] if args else None
+        updater.update_disclosure_date(end_date)
+
+    elif command == 'daily-update':
+        updater.daily_update()
+
+    elif command == 'init-basic':
+        updater.init_basic()
+
+    elif command == 'init-market':
+        start = args[0] if args else '2020-01-01'
+        updater.init_market_data(start)
+
+    elif command == 'full-update':
+        start = args[0] if len(args) > 0 else '2020-01-01'
+        codes = args[1:] if len(args) > 1 else None
+        updater.full_update(market_start=start, financial_codes=codes)
+
+    elif command == 'status':
+        _cmd_data_status()
+
+
+def _cmd_data_status():
+    """显示本地数据状态"""
+    from src.data.api import get_data_status
+    status = get_data_status()
+
+    print("=" * 50)
+    print("本地数据状态")
+    print("=" * 50)
+
+    print("\n日线数据:")
+    for key in ['daily_raw', 'daily_indicator', 'daily_adj_factor', 'daily_factors']:
+        info = status.get(key, {})
+        label = key.replace('daily_', '  ')
+        partitions = info.get('partitions', 0)
+        latest = info.get('latest_date', '-')
+        months = info.get('months', '-')
+        print(f"  {label}: {partitions} 分区, 最新 {latest}, 范围 {months}")
+
+    # 时序因子
+    ts_info = status.get('ts_factors', {})
+    print(f"\n时序因子: {ts_info.get('stocks', 0)} 只股票, {ts_info.get('factors', 0)} 个因子")
+
+    _FINANCIAL_KEYS = [
+        'balancesheet', 'income', 'cashflow', 'fina_indicator',
+        'dividend', 'top10_holders', 'top10_floatholders',
+        'pledge_stat', 'pledge_detail', 'fina_audit', 'fina_mainbz',
+        'stk_holdernumber', 'stk_holdertrade', 'share_float', 'repurchase',
+        'disclosure_date',
+    ]
+    print("\n财报数据:")
+    for sub in _FINANCIAL_KEYS:
+        info = status.get(f'financial_{sub}', {})
+        count = info.get('count', 0)
+        if count > 0:
+            print(f"    {sub}: {count} 只/期")
+
+    print(f"\n股票列表: {status.get('stock_list', {}).get('active_count', 0)} 只活跃")
+
+    from src.data.settings import DATA_START_DATE
+    print(f"数据起始日期: {DATA_START_DATE}")
 
 
 def _cmd_screen(config: StrategyConfig, args: list):
@@ -76,44 +228,37 @@ def _cmd_screen(config: StrategyConfig, args: list):
     print(format_screen_result(result))
 
 
-def _cmd_analyze(config: StrategyConfig, args: list):
-    """单股分析"""
+def _cmd_agent_analyze(config: StrategyConfig, args: list):
+    """Agent 驱动的自动分析"""
     if len(args) < 2:
-        print("用法: analyze <ts_code> <cutoff_date> [--blind]")
+        print("用法: agent-analyze <ts_code> <cutoff_date> [--no-blind]")
         sys.exit(1)
 
-    from src.analyzer.analysis_runner import prepare_analysis
+    import asyncio
+    from src.agent.runtime import run_blind_analysis
 
     ts_code = args[0]
     cutoff_date = args[1]
-    blind_mode = '--blind' in args
+    blind_mode = "--no-blind" not in args
 
-    prepare_analysis(ts_code, cutoff_date, blind_mode=blind_mode, config=config)
+    output_dir = config.get_backtest_dir() / "agent_reports"
+    print(f"Agent 分析: {ts_code} @ {cutoff_date} ({'盲测' if blind_mode else '非盲测'})")
+    print(f"输出目录: {output_dir}")
+    print()
 
+    result = asyncio.run(
+        run_blind_analysis(ts_code, cutoff_date, config, blind_mode, output_dir)
+    )
 
-def _cmd_blind_generate(config: StrategyConfig):
-    """批量生成盲测prompt"""
-    from src.screener.blind_batch import generate_all_prompts
-    generate_all_prompts(config=config)
+    meta = result["metadata"]
+    print(f"\n分析完成: {meta['chapters_completed']} 章, {meta['elapsed_seconds']}秒")
+    print(f"模型: {meta['model']}")
 
-
-def _cmd_blind_report(config: StrategyConfig):
-    """汇总盲测结果"""
-    from src.screener.blind_batch import generate_report
-    generate_report(config=config)
-
-
-def _cmd_parse_template(config: StrategyConfig):
-    """解析投资模版为章节"""
-    from src.analyzer.framework_parser import parse_template, save_chunks
-
-    chunks = parse_template(config=config)
-    print(f"解析完成, 共 {len(chunks)} 章:")
-    for chunk in chunks:
-        print(f"  Ch{chunk.chapter}: {chunk.title} ({chunk.line_count} 行, {chunk.char_count} 字符)")
-
-    out_dir = save_chunks(chunks, config=config)
-    print(f"\n已保存到: {out_dir}")
+    synthesis = result.get("synthesis", {})
+    if synthesis:
+        print(f"\n综合研判:")
+        for k, v in synthesis.items():
+            print(f"  {k}: {v}")
 
 
 if __name__ == '__main__':

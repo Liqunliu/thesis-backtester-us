@@ -1,5 +1,14 @@
 """
 全局配置
+
+环境变量:
+    TUSHARE_TOKEN    Tushare Pro API token (必需)
+    DATA_PROVIDER    数据源名称 (默认 "tushare")
+
+路径常量:
+    TUSHARE_DATA_DIR    市场数据目录  data/tushare/
+    FINANCIAL_DATA_DIR  财报数据目录  data/financial/
+    SNAPSHOT_DIR        快照输出目录  data/snapshots/
 """
 import os
 from pathlib import Path
@@ -29,5 +38,11 @@ ANALYSIS_DB_PATH = DATA_ROOT / "analysis_results" / "results.db"
 # Parquet 压缩方式
 PARQUET_COMPRESSION = "zstd"
 
+# 数据提供者 (tushare / akshare / csv / ...)
+DATA_PROVIDER = os.environ.get("DATA_PROVIDER", "tushare")
+
 # 日期格式
 DATE_FORMAT = "%Y-%m-%d"
+
+# 数据起始日期 (回填下限)
+DATA_START_DATE = os.environ.get("DATA_START_DATE", "2015-01-01")

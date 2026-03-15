@@ -21,7 +21,7 @@ import pandas as pd
 
 from src.data import api
 from src.data.settings import ANALYSIS_DB_PATH
-from src.analyzer.analysis_runner import init_db
+from src.engine.tracker import init_db
 
 
 @dataclass

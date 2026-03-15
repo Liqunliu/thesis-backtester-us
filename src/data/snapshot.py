@@ -1,7 +1,8 @@
 """
 时间点快照生成器
 
-核心模块：给定股票代码和截止日期，生成该时间点下可获取的全部数据快照。
+给定股票代码和截止日期，生成该时间点下可获取的全部数据快照。
+快照严格按公告日期过滤，杜绝前视偏差，供 Agent 盲测分析使用。
 
 时间边界规则（Layer 1 - 数据层硬过滤）：
   - 财报：按 ann_date（公告日期）过滤，不是 end_date（报告期）
@@ -9,11 +10,18 @@
   - 分红：ann_date <= cutoff_date
   - 股东：ann_date <= cutoff_date
 
-用法:
-    python -m src.data.snapshot 601288.SH 2024-06-30
+CLI:
+    python -m src.data.snapshot 601288.SH 2024-06-30          # 生成快照并保存
+    python -m src.data.snapshot 601288.SH 2024-06-30 --blind  # 盲测模式（隐藏公司名称）
+
+Python:
+    from src.data.snapshot import create_snapshot, snapshot_to_markdown
+    snap = create_snapshot('601288.SH', '2024-06-30')
+    md = snapshot_to_markdown(snap, blind_mode=True)
 """
 import json
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
@@ -32,6 +40,9 @@ class StockSnapshot:
     stock_name: str
     cutoff_date: str
     generated_at: str
+    industry: str = ''
+    area: str = ''
+    list_date: str = ''
 
     # 行情数据
     price_history: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -44,6 +55,16 @@ class StockSnapshot:
     fina_indicator: pd.DataFrame = field(default_factory=pd.DataFrame)
     dividend: pd.DataFrame = field(default_factory=pd.DataFrame)
     top10_holders: pd.DataFrame = field(default_factory=pd.DataFrame)
+    top10_floatholders: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+    # 治理与风险数据
+    fina_audit: pd.DataFrame = field(default_factory=pd.DataFrame)
+    fina_mainbz: pd.DataFrame = field(default_factory=pd.DataFrame)
+    pledge_stat: pd.DataFrame = field(default_factory=pd.DataFrame)
+    stk_holdernumber: pd.DataFrame = field(default_factory=pd.DataFrame)
+    stk_holdertrade: pd.DataFrame = field(default_factory=pd.DataFrame)
+    share_float: pd.DataFrame = field(default_factory=pd.DataFrame)
+    repurchase: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     # 元数据
     latest_report_period: str = ''
@@ -73,10 +94,24 @@ def create_snapshot(
     Returns:
         StockSnapshot 包含截止日期前所有可用数据
     """
-    stock_name = api.get_stock_name(ts_code) or ts_code
+    # 从 stock_list 一次性获取名称、行业、地区（避免重复读盘）
+    stock_name, industry, area, list_date = ts_code, '', '', ''
+    stock_list = api.get_stock_list(only_active=False)
+    if not stock_list.empty:
+        row = stock_list[stock_list['ts_code'] == ts_code]
+        if not row.empty:
+            r = row.iloc[0]
+            stock_name = str(r.get('name', ts_code)) if pd.notna(r.get('name')) else ts_code
+            industry = str(r.get('industry', '')) if pd.notna(r.get('industry')) else ''
+            area = str(r.get('area', '')) if pd.notna(r.get('area')) else ''
+            list_date = str(r.get('list_date', '')) if pd.notna(r.get('list_date')) else ''
+
     snapshot = StockSnapshot(
         ts_code=ts_code,
         stock_name=stock_name,
+        industry=industry,
+        area=area,
+        list_date=list_date,
         cutoff_date=cutoff_date,
         generated_at=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
     )
@@ -92,60 +127,71 @@ def create_snapshot(
     if not snapshot.daily_indicators.empty:
         snapshot.data_sources.append('daily_indicator')
 
-    # ==================== 基本面数据（按公告日期过滤）====================
+    # ==================== 基本面数据（并行加载 + 按公告日期过滤）====================
 
-    # 获取披露日期表，用于确定哪些报告在截止日前已公开
-    disclosure_df = api.get_disclosure_dates(ts_code)
+    # 并行读取所有财务 parquet 文件（I/O 密集，线程池加速）
+    _fin_loaders = {
+        'disclosure_dates': lambda: api.get_disclosure_dates(ts_code),
+        'balancesheet': lambda: api.get_balancesheet(ts_code),
+        'income': lambda: api.get_income(ts_code),
+        'cashflow': lambda: api.get_cashflow(ts_code),
+        'fina_indicator': lambda: api.get_financial_indicator(ts_code),
+        'dividend': lambda: api.get_dividend(ts_code),
+        'top10_holders': lambda: api.get_top10_holders(ts_code),
+        'top10_floatholders': lambda: api.get_top10_floatholders(ts_code),
+        'fina_audit': lambda: api.get_fina_audit(ts_code, end_date=cutoff_date),
+        'fina_mainbz': lambda: api.get_fina_mainbz(ts_code, end_date=cutoff_date),
+        'pledge_stat': lambda: api.get_pledge_stat(ts_code, end_date=cutoff_date),
+        'stk_holdernumber': lambda: api.get_stk_holdernumber(ts_code, end_date=cutoff_date),
+        'stk_holdertrade': lambda: api.get_stk_holdertrade(ts_code),
+        'share_float': lambda: api.get_share_float(ts_code),
+        'repurchase': lambda: api.get_repurchase(ts_code),
+    }
+    _fin_data = {}
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = {k: executor.submit(fn) for k, fn in _fin_loaders.items()}
+        for k, fut in futures.items():
+            try:
+                _fin_data[k] = fut.result()
+            except Exception:
+                _fin_data[k] = pd.DataFrame()
 
-    # 资产负债表
-    bs = api.get_balancesheet(ts_code)
-    if not bs.empty:
-        bs = _filter_by_announcement_date(bs, cutoff_date, disclosure_df)
-        snapshot.balancesheet = bs
-        if not bs.empty:
-            snapshot.data_sources.append('balancesheet')
+    disclosure_df = _fin_data['disclosure_dates']
 
-    # 利润表
-    inc = api.get_income(ts_code)
-    if not inc.empty:
-        inc = _filter_by_announcement_date(inc, cutoff_date, disclosure_df)
-        snapshot.income = inc
-        if not inc.empty:
-            snapshot.data_sources.append('income')
+    # 需要按公告日期过滤的财报
+    for attr, key in [('balancesheet', 'balancesheet'), ('income', 'income'),
+                      ('cashflow', 'cashflow'), ('fina_indicator', 'fina_indicator')]:
+        df = _fin_data[key]
+        if not df.empty:
+            df = _filter_by_announcement_date(df, cutoff_date, disclosure_df)
+        setattr(snapshot, attr, df)
+        if not df.empty:
+            snapshot.data_sources.append(key)
 
-    # 现金流量表
-    cf = api.get_cashflow(ts_code)
-    if not cf.empty:
-        cf = _filter_by_announcement_date(cf, cutoff_date, disclosure_df)
-        snapshot.cashflow = cf
-        if not cf.empty:
-            snapshot.data_sources.append('cashflow')
+    # 按 ann_date 过滤的数据
+    for attr, key, date_col in [
+        ('dividend', 'dividend', 'ann_date'),
+        ('top10_holders', 'top10_holders', 'ann_date'),
+        ('top10_floatholders', 'top10_floatholders', 'ann_date'),
+        ('fina_audit', 'fina_audit', 'ann_date'),
+        ('stk_holdernumber', 'stk_holdernumber', 'ann_date'),
+        ('stk_holdertrade', 'stk_holdertrade', 'ann_date'),
+        ('repurchase', 'repurchase', 'ann_date'),
+        ('share_float', 'share_float', 'float_date'),
+    ]:
+        df = _fin_data[key]
+        if not df.empty and date_col in df.columns:
+            df = df[df[date_col] <= cutoff_date]
+        setattr(snapshot, attr, df)
+        if not df.empty:
+            snapshot.data_sources.append(key)
 
-    # 财务指标
-    fi = api.get_financial_indicator(ts_code)
-    if not fi.empty:
-        fi = _filter_by_announcement_date(fi, cutoff_date, disclosure_df)
-        snapshot.fina_indicator = fi
-        if not fi.empty:
-            snapshot.data_sources.append('fina_indicator')
-
-    # 分红数据（按公告日期过滤）
-    div = api.get_dividend(ts_code)
-    if not div.empty:
-        if 'ann_date' in div.columns:
-            div = div[div['ann_date'] <= cutoff_date]
-        snapshot.dividend = div
-        if not div.empty:
-            snapshot.data_sources.append('dividend')
-
-    # 前十大股东（按公告日期过滤）
-    holders = api.get_top10_holders(ts_code)
-    if not holders.empty:
-        if 'ann_date' in holders.columns:
-            holders = holders[holders['ann_date'] <= cutoff_date]
-        snapshot.top10_holders = holders
-        if not holders.empty:
-            snapshot.data_sources.append('top10_holders')
+    # 无需日期过滤的数据
+    for attr, key in [('fina_mainbz', 'fina_mainbz'), ('pledge_stat', 'pledge_stat')]:
+        df = _fin_data[key]
+        setattr(snapshot, attr, df)
+        if not df.empty:
+            snapshot.data_sources.append(key)
 
     # ==================== 元数据 ====================
     if not snapshot.balancesheet.empty:
@@ -254,6 +300,12 @@ def snapshot_to_markdown(snapshot: StockSnapshot, blind_mode: bool = False) -> s
         lines.append(f"# {snapshot.stock_name}（{snapshot.ts_code}）数据快照")
     lines.append(f"")
     lines.append(f"**截止日期**: {snapshot.cutoff_date}")
+    if snapshot.industry:
+        lines.append(f"**所属行业**: {snapshot.industry}")
+    if snapshot.area:
+        lines.append(f"**所在地区**: {snapshot.area}")
+    if snapshot.list_date:
+        lines.append(f"**上市日期**: {snapshot.list_date}")
     lines.append(f"**最新报告期**: {snapshot.latest_report_period}")
     lines.append(f"**数据源**: {', '.join(snapshot.data_sources)}")
     if snapshot.warnings:
@@ -398,6 +450,149 @@ def snapshot_to_markdown(snapshot: StockSnapshot, blind_mode: bool = False) -> s
                 ratio = row.get('hold_ratio', 0)
                 amount = row.get('hold_amount', 0)
                 lines.append(f"| {i} | {name} | {ratio:.2f} | {amount:,.0f} |")
+        lines.append("")
+
+    # 前十大流通股东
+    if not snapshot.top10_floatholders.empty:
+        df = snapshot.top10_floatholders
+        latest_period = df['end_date'].max() if 'end_date' in df.columns else ''
+        holders = df[df['end_date'] == latest_period] if latest_period else df
+        lines.append(f"## 前十大流通股东（{latest_period}）")
+        if blind_mode:
+            lines.append("| 排名 | 股东属性 | 持股数量 |")
+            lines.append("|------|---------|---------|")
+            for i, (_, row) in enumerate(holders.head(10).iterrows(), 1):
+                attr = _classify_holder(row.get('holder_name', ''))
+                amount = row.get('hold_amount', 0)
+                lines.append(f"| {i} | {attr} | {amount:,.0f} |")
+        else:
+            lines.append("| 排名 | 股东名称 | 持股数量 |")
+            lines.append("|------|---------|---------|")
+            for i, (_, row) in enumerate(holders.head(10).iterrows(), 1):
+                lines.append(f"| {i} | {row.get('holder_name', 'N/A')} | {row.get('hold_amount', 0):,.0f} |")
+        lines.append("")
+
+    # 审计意见
+    if not snapshot.fina_audit.empty:
+        lines.append("## 审计意见")
+        audit = snapshot.fina_audit.drop_duplicates(subset=['end_date'], keep='last')
+        audit = audit.sort_values('end_date', ascending=False).head(4)
+        lines.append("| 报告期 | 审计结果 | 审计机构 |")
+        lines.append("|--------|---------|---------|")
+        for _, row in audit.iterrows():
+            lines.append(
+                f"| {row.get('end_date', 'N/A')} "
+                f"| {row.get('audit_result', 'N/A')} "
+                f"| {row.get('audit_agency', 'N/A')} |"
+            )
+        lines.append("")
+
+    # 主营业务构成
+    if not snapshot.fina_mainbz.empty:
+        df = snapshot.fina_mainbz
+        latest_period = df['end_date'].max()
+        latest = df[df['end_date'] == latest_period]
+        lines.append(f"## 主营业务构成（{latest_period}）")
+        lines.append("| 业务/地区 | 营业收入 | 营业成本 | 毛利率 |")
+        lines.append("|----------|---------|---------|-------|")
+        for _, row in latest.iterrows():
+            item = row.get('bz_item', 'N/A')
+            sales = row.get('bz_sales', 0)
+            cost = row.get('bz_cost', 0)
+            margin = ''
+            if pd.notna(sales) and pd.notna(cost) and float(sales) > 0:
+                margin = f"{(1 - float(cost)/float(sales))*100:.1f}%"
+            sales_str = f"{float(sales)/1e8:.2f}亿" if pd.notna(sales) and abs(float(sales)) >= 1e4 else str(sales)
+            cost_str = f"{float(cost)/1e8:.2f}亿" if pd.notna(cost) and abs(float(cost)) >= 1e4 else str(cost)
+            lines.append(f"| {item} | {sales_str} | {cost_str} | {margin} |")
+        lines.append("")
+
+    # 股权质押
+    if not snapshot.pledge_stat.empty:
+        lines.append("## 股权质押统计")
+        pledge = snapshot.pledge_stat.sort_values('end_date', ascending=False).head(4)
+        lines.append("| 日期 | 质押次数 | 质押比例(%) |")
+        lines.append("|------|---------|-----------|")
+        for _, row in pledge.iterrows():
+            ratio = row.get('pledge_ratio', 0)
+            ratio_str = f"{float(ratio):.2f}" if pd.notna(ratio) else 'N/A'
+            lines.append(
+                f"| {row.get('end_date', 'N/A')} "
+                f"| {row.get('pledge_count', 'N/A')} "
+                f"| {ratio_str} |"
+            )
+        lines.append("")
+
+    # 股东人数
+    if not snapshot.stk_holdernumber.empty:
+        lines.append("## 股东人数变化")
+        hn = snapshot.stk_holdernumber.drop_duplicates(subset=['end_date'], keep='last')
+        hn = hn.sort_values('end_date', ascending=False).head(6)
+        lines.append("| 日期 | 股东人数 | 较上期变化 |")
+        lines.append("|------|---------|----------|")
+        for _, row in hn.iterrows():
+            num = row.get('holder_num', 0)
+            change = row.get('holder_num_change')
+            try:
+                change_str = f"{float(change):+.0f}" if pd.notna(change) and str(change).strip() else ''
+            except (ValueError, TypeError):
+                change_str = ''
+            lines.append(f"| {row.get('end_date', 'N/A')} | {int(num):,} | {change_str} |")
+        lines.append("")
+
+    # 股东增减持
+    if not snapshot.stk_holdertrade.empty:
+        lines.append("## 股东增减持")
+        ht = snapshot.stk_holdertrade
+        if 'ann_date' in ht.columns:
+            ht = ht.sort_values('ann_date', ascending=False).head(10)
+        lines.append("| 公告日 | 股东 | 方向 | 变动股数 | 变动比例(%) |")
+        lines.append("|--------|------|------|---------|-----------|")
+        for _, row in ht.iterrows():
+            name = _classify_holder(row.get('holder_name', '')) if blind_mode else row.get('holder_name', 'N/A')
+            in_de = row.get('in_de', 'N/A')
+            vol = row.get('change_vol', 0)
+            vol_str = f"{float(vol):,.0f}" if pd.notna(vol) else 'N/A'
+            ratio = row.get('change_ratio', 0)
+            ratio_str = f"{float(ratio):.4f}" if pd.notna(ratio) else 'N/A'
+            lines.append(f"| {row.get('ann_date', 'N/A')} | {name} | {in_de} | {vol_str} | {ratio_str} |")
+        lines.append("")
+
+    # 限售解禁
+    if not snapshot.share_float.empty:
+        lines.append("## 限售解禁")
+        sf = snapshot.share_float
+        if 'float_date' in sf.columns:
+            sf = sf.sort_values('float_date', ascending=False).head(8)
+        lines.append("| 解禁日 | 股东 | 解禁股数 | 解禁比例(%) |")
+        lines.append("|--------|------|---------|-----------|")
+        for _, row in sf.iterrows():
+            name = _classify_holder(row.get('holder_name', '')) if blind_mode else row.get('holder_name', 'N/A')
+            share = row.get('float_share', 0)
+            share_str = f"{float(share):,.0f}" if pd.notna(share) else 'N/A'
+            ratio = row.get('float_ratio', 0)
+            ratio_str = f"{float(ratio):.4f}" if pd.notna(ratio) else 'N/A'
+            lines.append(f"| {row.get('float_date', 'N/A')} | {name} | {share_str} | {ratio_str} |")
+        lines.append("")
+
+    # 股票回购
+    if not snapshot.repurchase.empty:
+        lines.append("## 股票回购")
+        rp = snapshot.repurchase
+        if 'ann_date' in rp.columns:
+            rp = rp.sort_values('ann_date', ascending=False).head(6)
+        lines.append("| 公告日 | 回购数量 | 回购金额 | 价格区间 | 进度 |")
+        lines.append("|--------|---------|---------|---------|------|")
+        for _, row in rp.iterrows():
+            vol = row.get('vol', 0)
+            vol_str = f"{float(vol):,.0f}" if pd.notna(vol) else 'N/A'
+            amt = row.get('amount', 0)
+            amt_str = f"{float(amt)/1e4:.2f}万" if pd.notna(amt) and float(amt) >= 1e4 else str(amt) if pd.notna(amt) else 'N/A'
+            low = row.get('low_limit', '')
+            high = row.get('high_limit', '')
+            price_range = f"{low}-{high}" if pd.notna(low) and pd.notna(high) else 'N/A'
+            proc = row.get('proc', 'N/A')
+            lines.append(f"| {row.get('ann_date', 'N/A')} | {vol_str} | {amt_str} | {price_range} | {proc} |")
         lines.append("")
 
     # 时间边界声明

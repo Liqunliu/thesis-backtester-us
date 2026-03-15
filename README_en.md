@@ -18,10 +18,10 @@ Thesis backtest:       investment philosophy  →  AI blind analysis  →  compa
 
 **How it works:**
 
-1. **Define** your investment thesis as a structured analysis framework (YAML config + chapter templates)
-2. **Screen** historical cross-sections: at each past date, find stocks that match your quantitative filters
-3. **Blind-test**: feed the AI only the financial data available *up to that date*, with company names hidden
-4. **Validate**: compare AI's buy/avoid recommendations against actual forward returns
+1. **Define** your investment thesis as operator compositions (`.md` analysis instructions + YAML config)
+2. **Screen** historical cross-sections with declarative quantitative filters
+3. **Blind-test**: feed the AI only financial data available *up to that date*, with company names hidden
+4. **Validate**: compare AI's buy/avoid recommendations against actual forward returns with 5-dimensional quality scoring
 
 The key insight: **any investment idea that can be described in words can be backtested this way.**
 
@@ -63,65 +63,66 @@ We validated a value investing thesis (turtle-grade screening: low PE + low PB +
 | 2023 | +9.5% | +48.4% | 3 coal/bank picks, avg +48% |
 | 2024 | +8.8% | Cash (no signal) | — |
 
-> Full details: [strategies/v556_value/backtest/validation_report.md](strategies/v556_value/backtest/validation_report.md)
+> Full details in `strategies/v6_value/backtest/` directory
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│              Thesis Backtester Engine            │
-├─────────────────────────────────────────────────┤
-│                                                 │
-│  Strategy Instance (YAML-driven)                │
-│  ┌───────────┐ ┌───────────┐ ┌───────────┐     │
-│  │ Framework  │ │ Screener  │ │ Snapshot   │     │
-│  │ Parser     │ │ & Sampler │ │ Generator  │     │
-│  │            │ │           │ │            │     │
-│  │ thesis →   │ │ filters → │ │ date →     │     │
-│  │ chapters → │ │ pool →    │ │ data pack →│     │
-│  │ prompts    │ │ samples   │ │ blind mask │     │
-│  └─────┬─────┘ └─────┬─────┘ └─────┬─────┘     │
-│        └──────────┬───┘─────────────┘           │
-│                   ▼                             │
-│  ┌─────────────────────────────────────────┐    │
-│  │         AI Blind Analysis Engine         │    │
-│  │  framework prompt + data snapshot → LLM  │    │
-│  │  → structured score + recommendation     │    │
-│  └───────────────────┬─────────────────────┘    │
-│                      ▼                          │
-│  ┌─────────────────────────────────────────┐    │
-│  │       Validation & Attribution Engine    │    │
-│  │  AI judgment vs actual returns           │    │
-│  │  → accuracy, alpha, capability boundary  │    │
-│  └─────────────────────────────────────────┘    │
-│                                                 │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                        Strategy Instance                        │
+│  strategy.yaml (screening + chapters + operators + LLM config)  │
+└─────────────────────────┬───────────────────────────────────────┘
+                          │
+┌─────────────────────────▼───────────────────────────────────────┐
+│                      Engine Layer (src/engine/)                  │
+│  StrategyConfig · Launcher · FactorRegistry · OperatorRegistry  │
+│  Tracker (SQLite)                                               │
+└──────┬──────────┬──────────┬──────────┬─────────────────────────┘
+       │          │          │          │
+┌──────▼───┐ ┌───▼────┐ ┌──▼────┐ ┌───▼──────┐
+│ Screener │ │ Agent  │ │ Back- │ │   Web    │
+│          │ │ (Blind)│ │ test  │ │ Dashboard│
+└──────┬───┘ └───┬────┘ └──┬────┘ └───┬──────┘
+       │         │         │          │
+┌──────▼─────────▼─────────▼──────────▼───────────────────────────┐
+│                      Data Layer (src/data/)                      │
+│  Provider (abstract) · Parquet Storage · Snapshot (parallel I/O)│
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Project Structure
+
+```
+src/
+├── engine/        # Engine: StrategyConfig + Launcher + FactorRegistry + OperatorRegistry + Tracker
+├── data/          # Data: Provider abstraction + Parquet storage + time-point snapshots
+│   └── tushare/   #   Tushare Provider implementation
+├── agent/         # Agent: LLM blind analysis (DAG scheduling + tool_use + 16 data query tools)
+├── screener/      # Screener: declarative quantitative filtering (reads pre-computed factors)
+├── backtest/      # Backtest: batch backtest + forward return collection + 5-dim quality scoring
+└── web/           # Web: Streamlit strategy tuning dashboard
+
+factors/           # Quantitative factor definitions (.py, cross-section + time-series)
+operators/         # Qualitative analysis operators (.md, YAML frontmatter + instructions, 21 total)
+  ├── screening/   #   Data quality, geopolitical, quick screen, SOE identification
+  ├── fundamental/ #   Debt, cycle, cash flow, management, stream classification, recovery
+  ├── valuation/   #   FCF, dividend, PE trap, safety margin, owner earnings, valuation repair
+  ├── decision/    #   Apple model, position management, stress test
+  └── special/     #   Cigar butt, light asset model
+
+strategies/        # Strategy instances (one directory per investment thesis)
+└── v6_value/      #   V6 Value Investing (operator-driven, 6 chapters, 21 operators)
+    └── strategy.yaml  # All-in-one config: screening + chapters + operators + LLM
 ```
 
 ### Key Design Decisions
 
-- **Blind testing**: Company names are hidden to eliminate AI brand bias and memory contamination
-- **Time-boundary enforcement**: 3-layer protection ensures no future data leakage (announcement date filtering, prompt injection, output scanning)
-- **Strategy-as-config**: The engine is thesis-agnostic; each investment philosophy is a separate YAML-driven instance
-- **Standardized output**: Every analysis produces a comparable score (0-100) and recommendation (buy/hold/avoid)
-
-## Project Structure
-
-```
-src/
-├── engine/        # Core: StrategyConfig + Launcher (thesis-agnostic)
-├── data/          # Data layer: Tushare + Parquet + time-point snapshots
-├── analyzer/      # Framework parser + prompt builder + orchestration
-├── screener/      # Quantitative screening + blind batch testing
-└── backtest/      # Cross-section analysis + outcome collection + scoring
-
-strategies/
-└── v556_value/    # Example: V5.5.6 Value Investing (turtle-grade)
-    ├── strategy.yaml      # Full strategy configuration
-    ├── chunks/            # Parsed analysis chapters (10 chapters)
-    ├── output_schema.py   # Structured output definition
-    └── backtest/          # 120 blind test reports + validation
-```
+- **Operator-driven**: Analysis logic lives in operators (`.md` files). Strategies compose operators via YAML. Output schema auto-generated from operator frontmatter `outputs` fields
+- **Blind testing**: Company names hidden to eliminate AI brand bias and memory contamination
+- **Time-boundary enforcement**: 3-layer protection — data layer hard filtering (by announcement date), prompt injection, agent tool sandbox
+- **Strategy-as-config**: Engine is thesis-agnostic; `strategy.yaml` defines screening + analysis framework + LLM parameters in one file
+- **Industry gates**: Operator-level exclusion guards prevent misapplication (e.g., FCF valuation on banks, cigar butt classification on profitable companies)
+- **Provider abstraction**: Data sources decoupled via Protocol; swap Tushare by implementing the interface
 
 ## Quick Start
 
@@ -129,45 +130,55 @@ strategies/
 
 - Python 3.9+
 - [Tushare Pro](https://tushare.pro/) API token (for A-share market data)
-- An LLM API (Claude recommended; the framework prompts are in Chinese)
+- An OpenAI-compatible LLM API (the analysis prompts are in Chinese)
 
 ### Installation
 
 ```bash
 pip install -e .
-
-# Configure your Tushare token
 export TUSHARE_TOKEN="your_token_here"
+```
+
+### Data Initialization
+
+```bash
+# Initialize basic data (stock list + trade calendar)
+python -m src.engine.launcher data init-basic
+
+# Initialize market data (daily quotes + indicators + factors)
+python -m src.engine.launcher data init-market 2020-01-01
+
+# Daily incremental update
+python -m src.engine.launcher data daily-update
 ```
 
 ### Usage
 
-All commands go through the unified launcher:
-
 ```bash
-# Screen stocks at a specific date
-python -m src.engine.launcher strategies/v556_value/strategy.yaml screen 2024-06-30
+# Quantitative screening
+python -m src.engine.launcher strategies/v6_value/strategy.yaml screen 2024-06-30
 
-# Analyze a single stock (generates structured prompt)
-python -m src.engine.launcher strategies/v556_value/strategy.yaml analyze 601288.SH 2024-06-30
+# Single stock agent analysis (requires LLM_API_KEY + LLM_BASE_URL)
+python -m src.engine.launcher strategies/v6_value/strategy.yaml agent-analyze 601288.SH 2024-06-30
 
-# Blind test mode (company name hidden)
-python -m src.engine.launcher strategies/v556_value/strategy.yaml analyze 601288.SH 2024-06-30 --blind
+# Batch cross-section backtest
+python -m src.backtest.batch_backtest --strategy strategies/v6_value/strategy.yaml --top 50
 
-# Batch generate blind test prompts
-python -m src.engine.launcher strategies/v556_value/strategy.yaml blind-generate
+# Forward return collection
+python -m src.backtest.outcome_collector 601288.SH 2024-06-30
 
-# Generate validation report
-python -m src.engine.launcher strategies/v556_value/strategy.yaml blind-report
+# Web tuning dashboard
+streamlit run src/web/app.py
 ```
 
 ### Creating Your Own Strategy
 
-1. Create `strategies/<name>/strategy.yaml` (see [v556_value](strategies/v556_value/strategy.yaml) for reference)
-2. Write your investment thesis template
-3. Define the output schema
-4. Parse template: `python -m src.engine.launcher strategies/<name>/strategy.yaml parse-template`
-5. Run screening and blind tests
+1. Create `strategies/<name>/strategy.yaml` (reference [v6_value](strategies/v6_value/strategy.yaml))
+2. Define quantitative screening conditions in `screening` section
+3. Compose operators in `framework.chapters` (or create new operators in `operators/`)
+4. Run screening → agent analysis → backtest validation
+
+No code required. Output schema is auto-generated from operator `outputs` definitions.
 
 ## What Can Be Backtested?
 
@@ -182,6 +193,8 @@ Any investment philosophy that can be described in words:
 | Growth at reasonable price | "Can high growth justify high PE?" | Planned |
 | SOE value rerating | "Does state reform translate to returns?" | Planned |
 
+New strategies only require a `strategy.yaml` composing operators — no engine code changes needed.
+
 ## How It Differs from Existing Tools
 
 | Category | Examples | What They Test | What We Test |
@@ -193,23 +206,45 @@ Any investment philosophy that can be described in words:
 
 ## Documentation
 
-- [Product Design](docs/investment_thesis_backtester.md) — Full product vision and architecture
-- [Data Roadmap](docs/data_dimensions_roadmap.md) — Planned data expansion
-- [Framework Evolution](docs/framework_evolution.md) — Auto-improvement mechanisms
-- [Scaling Plan](docs/scaling_plan.md) — Blind test scaling strategy
+### Design Docs
+
+- [Architecture](docs/design/architecture.md) — System layers and module responsibilities
+- [Agent Runtime](docs/design/agent.md) — DAG scheduling, prompt assembly, tool sandbox
+- [Data Layer](docs/design/data_layer.md) — Provider abstraction, Parquet storage, snapshots
+- [Operators & Factors](docs/design/operators.md) — 21 operator catalog, auto-schema, industry gates
+- [Screener](docs/design/screener.md) — Declarative quantitative screening engine
+- [Backtest](docs/design/backtest.md) — Batch backtest, 5-dimensional quality scoring
+
+### Planning Docs
+
+- [Product Design](docs/investment_thesis_backtester.md) — Full product vision
+- [Data Roadmap](docs/data_dimensions_roadmap.md) — Implemented and planned data dimensions
+- [Framework Evolution](docs/framework_evolution.md) — Error pattern analysis and improvement directions
+- [Scaling Plan](docs/scaling_plan.md) — Scaling from 60 to 600+ samples
+
+## Tech Stack
+
+| Component | Technology |
+|-----------|-----------|
+| Language | Python 3.9+ |
+| Storage | Parquet (zstd compression, monthly/stock partitions) |
+| Database | SQLite (analysis tracking) |
+| LLM Interface | OpenAI-compatible API (async, tool_use) |
+| Data Source | Tushare Pro API (Provider abstraction) |
+| Web | Streamlit |
 
 ## Contributing
 
 This project is in early stage. Contributions welcome in:
 
-- **New strategy instances** — bring your own investment thesis
-- **Data source adapters** — US/HK market data providers
-- **Validation metrics** — Sharpe ratio, max drawdown, etc.
-- **Multi-model support** — GPT, Gemini, Llama comparison
+- **New strategy instances** — bring your own investment thesis, create a `strategy.yaml` composing operators
+- **New analysis operators** — add `.md` files to `operators/`
+- **Data source adapters** — implement `DataProvider` Protocol for US/HK market data
+- **Multi-model comparison** — GPT, Gemini, DeepSeek benchmarks
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache License 2.0
 
 ## Disclaimer
 

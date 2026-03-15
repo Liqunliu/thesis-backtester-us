@@ -1,72 +1,26 @@
 """
-量化快速筛选器
+声明式量化筛选引擎
 
-基于日线指标（PE/PB/股息率/市值）对全A股进行快速筛选，
-按评级标准打分排序，输出候选池。
-支持通过 StrategyConfig 配置不同的筛选条件和评级体系。
+从 StrategyConfig 读取声明式过滤条件和评分因子，
+对全A股进行筛选、评分、分级。不硬编码任何字段名。
+
+支持的过滤操作: min, max, fallback
+支持的评分方向: lower_better, higher_better
+支持的分级条件: min, max (per field, AND 逻辑)
 
 用法:
-    python -m src.screener.quick_filter 2024-06-30
-    python -m src.screener.quick_filter 2024-06-30 --top 50
-    python -m src.screener.quick_filter 2024-06-30 --strategy strategies/v556_value/strategy.yaml
+    python -m src.engine.launcher strategies/v6_value/strategy.yaml screen 2024-06-30
 """
+import logging
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import List
 
 import pandas as pd
 
 from src.data import api
+from src.engine.config import StrategyConfig
 
-if TYPE_CHECKING:
-    from src.engine.config import StrategyConfig
-
-
-# ==================== 默认值（向后兼容） ====================
-
-GOLD_TURTLE = {'pe_max': 8, 'pb_max': 0.8, 'dv_min': 7.0}
-SILVER_TURTLE = {'pe_max': 10, 'pb_max': 1.0, 'dv_min': 5.0}
-BRONZE_TURTLE = {'pe_max': 12, 'pb_max': 1.2, 'dv_min': 4.0}
-
-MIN_MARKET_CAP = 100  # 最低总市值（亿元）
-MAX_PE = 15           # PE上限
-MIN_PE = 0            # PE下限
-
-_DEFAULT_TIERS = [
-    {'name': '金龟', 'pe_max': 8, 'pb_max': 0.8, 'dv_min': 7.0},
-    {'name': '银龟', 'pe_max': 10, 'pb_max': 1.0, 'dv_min': 5.0},
-    {'name': '铜龟', 'pe_max': 12, 'pb_max': 1.2, 'dv_min': 4.0},
-]
-
-_DEFAULT_SCORING_WEIGHTS = {'pe': 0.3, 'pb': 0.3, 'dv': 0.4}
-_DEFAULT_SCORING_RANGES = {
-    'pe_full': 6, 'pe_zero': 15,
-    'pb_full': 0.5, 'pb_zero': 1.5,
-    'dv_zero': 2, 'dv_full': 8,
-}
-_DEFAULT_TIER_LABEL = '不达标'
-
-
-def _resolve_config(config: Optional["StrategyConfig"] = None):
-    """从 config 提取筛选参数，或使用默认值"""
-    if config is not None:
-        sc = config.get_screening_config()
-        tiers = config.get_tiers()
-        weights = config.get_scoring_weights()
-        ranges = config.get_scoring_ranges()
-        default_label = config.get_default_tier_label()
-        min_cap = sc.get('min_market_cap', MIN_MARKET_CAP)
-        max_pe = sc.get('max_pe', MAX_PE)
-        min_pe = sc.get('min_pe', MIN_PE)
-    else:
-        tiers = _DEFAULT_TIERS
-        weights = _DEFAULT_SCORING_WEIGHTS
-        ranges = _DEFAULT_SCORING_RANGES
-        default_label = _DEFAULT_TIER_LABEL
-        min_cap = MIN_MARKET_CAP
-        max_pe = MAX_PE
-        min_pe = MIN_PE
-
-    return tiers, weights, ranges, default_label, min_cap, max_pe, min_pe
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -79,44 +33,185 @@ class ScreenResult:
 
     @property
     def summary(self) -> str:
-        turtle_counts = {}
-        if not self.candidates.empty and 'turtle_rating' in self.candidates.columns:
-            turtle_counts = self.candidates['turtle_rating'].value_counts().to_dict()
+        tier_counts = {}
+        if not self.candidates.empty and 'tier_rating' in self.candidates.columns:
+            tier_counts = self.candidates['tier_rating'].value_counts().to_dict()
         parts = [
             f"截面: {self.cutoff_date}",
             f"全市场: {self.total_stocks}",
             f"基础过滤后: {self.after_basic_filter}",
             f"候选: {len(self.candidates)}",
         ]
-        for name, count in turtle_counts.items():
+        for name, count in tier_counts.items():
             parts.append(f"{name}:{count}")
         return " | ".join(parts)
 
 
+# ==================== 声明式引擎核心 ====================
+
+def _resolve_field(df: pd.DataFrame, filter_def: dict) -> pd.Series:
+    """
+    解析字段值，支持 fallback 链。
+    filter_def 示例: {field: "dv", fallback: "dv_ttm,dv_ratio"}
+    """
+    field_name = filter_def['field']
+
+    if field_name in df.columns:
+        series = df[field_name].copy()
+    else:
+        series = pd.Series(pd.NA, index=df.index)
+
+    # fallback: 主字段为空时，依次尝试备选字段
+    fallback = filter_def.get('fallback', '')
+    if fallback:
+        for fb_field in fallback.split(','):
+            fb_field = fb_field.strip()
+            if fb_field in df.columns:
+                series = series.fillna(df[fb_field])
+
+    return series
+
+
+def _apply_excludes(df: pd.DataFrame, stock_list: pd.DataFrame, exclude_rules: List[dict]) -> pd.DataFrame:
+    """应用排除规则"""
+    if stock_list.empty:
+        return df
+
+    for rule in exclude_rules:
+        field_name = rule.get('field', '')
+        contains = rule.get('contains', [])
+
+        if field_name in stock_list.columns and contains:
+            pattern = '|'.join(contains)
+            bad_mask = stock_list[field_name].str.contains(pattern, na=False)
+            valid_codes = set(stock_list[~bad_mask]['ts_code'].tolist())
+            df = df[df['ts_code'].isin(valid_codes)]
+
+    return df
+
+
+def _apply_filters(df: pd.DataFrame, filters: List[dict]) -> pd.DataFrame:
+    """应用声明式过滤条件"""
+    for f in filters:
+        field_name = f['field']
+
+        # 先解析字段（含 fallback），写回 df 以便后续评分使用
+        series = _resolve_field(df, f)
+        if field_name not in df.columns:
+            df[field_name] = series
+        else:
+            df[field_name] = series
+
+        # 过滤非空
+        df = df[df[field_name].notna()]
+
+        # min/max
+        if 'min' in f:
+            df = df[df[field_name] >= f['min']]
+        if 'max' in f:
+            df = df[df[field_name] <= f['max']]
+
+    return df
+
+
+def _compute_scores(df: pd.DataFrame, factors: List[dict]) -> pd.Series:
+    """根据评分因子计算综合得分（0-100）"""
+    if not factors:
+        return pd.Series(0.0, index=df.index)
+
+    # 归一化权重
+    total_weight = sum(f.get('weight', 1.0) for f in factors)
+    if total_weight == 0:
+        total_weight = 1.0
+
+    score = pd.Series(0.0, index=df.index)
+
+    for f in factors:
+        field_name = f['field']
+        weight = f.get('weight', 1.0) / total_weight
+        full_val = f.get('full', 0)
+        zero_val = f.get('zero', 0)
+        lower_better = f.get('lower_better', False)
+
+        if field_name not in df.columns:
+            continue
+
+        vals = df[field_name].fillna(zero_val)
+
+        if lower_better:
+            # PE 类: 值越小越好, full=6(满分), zero=15(零分)
+            raw = (zero_val - vals) / (zero_val - full_val) * 100
+        else:
+            # DV 类: 值越大越好, full=8(满分), zero=2(零分)
+            raw = (vals - zero_val) / (full_val - zero_val) * 100
+
+        factor_score = raw.clip(0, 100)
+        score += factor_score * weight
+
+    return score.round(1)
+
+
+def _compute_tiers(df: pd.DataFrame, tiers: List[dict], default_label: str) -> pd.Series:
+    """根据分级条件判定评级"""
+    ratings = pd.Series(default_label, index=df.index)
+
+    # 逆序处理：最宽松的先赋值，最严格的后赋值覆盖
+    for tier in reversed(tiers):
+        name = tier['name']
+        conditions = tier.get('conditions', [])
+
+        # 旧格式兼容: {name, pe_max, pb_max, dv_min} → conditions
+        if not conditions and any(k.endswith('_max') or k.endswith('_min') for k in tier):
+            conditions = []
+            for k, v in tier.items():
+                if k == 'name':
+                    continue
+                if k.endswith('_max'):
+                    field = k[:-4]  # pe_max → pe
+                    # 映射常见缩写
+                    field_map = {'pe': 'pe_ttm', 'dv': 'dv'}
+                    conditions.append({'field': field_map.get(field, field), 'max': v})
+                elif k.endswith('_min'):
+                    field = k[:-4]
+                    field_map = {'pe': 'pe_ttm', 'dv': 'dv'}
+                    conditions.append({'field': field_map.get(field, field), 'min': v})
+
+        mask = pd.Series(True, index=df.index)
+        for cond in conditions:
+            field_name = cond['field']
+            if field_name not in df.columns:
+                mask = pd.Series(False, index=df.index)
+                break
+            if 'min' in cond:
+                mask &= df[field_name] >= cond['min']
+            if 'max' in cond:
+                mask &= df[field_name] <= cond['max']
+
+        ratings[mask] = name
+
+    return ratings
+
+
+# ==================== 主入口 ====================
+
 def screen_at_date(
     cutoff_date: str,
+    config: StrategyConfig,
     top_n: int = 50,
-    min_market_cap: float = None,
-    max_pe: float = None,
-    config: Optional["StrategyConfig"] = None,
 ) -> ScreenResult:
     """
     在指定截面日期进行全量筛选
 
     Args:
         cutoff_date: 截面日期 YYYY-MM-DD
+        config: 策略配置
         top_n: 返回前N名候选
-        min_market_cap: 最低市值（亿元），None 时使用 config 或默认值
-        max_pe: PE上限，None 时使用 config 或默认值
-        config: 策略配置（可选）
     """
-    tiers, weights, ranges, default_label, cfg_min_cap, cfg_max_pe, cfg_min_pe = _resolve_config(config)
-
-    # 参数优先级：显式参数 > config > 默认值
-    if min_market_cap is None:
-        min_market_cap = cfg_min_cap
-    if max_pe is None:
-        max_pe = cfg_max_pe
+    filters = config.get_filters()
+    factors = config.get_scoring_factors()
+    tiers = config.get_tiers()
+    default_label = config.get_default_tier_label()
+    exclude_rules = config.get_exclude_rules()
 
     result = ScreenResult(cutoff_date=cutoff_date)
 
@@ -134,55 +229,93 @@ def screen_at_date(
     result.total_stocks = len(df)
     print(f"  截面交易日: {latest_date}, 全市场 {len(df)} 只股票")
 
-    # 2. 排除ST和退市
+    # 2. 排除规则
     stock_list = api.get_stock_list(only_active=True)
-    if not stock_list.empty:
-        st_mask = stock_list['name'].str.contains('ST|退', na=False)
-        valid_codes = set(stock_list[~st_mask]['ts_code'].tolist())
-        df = df[df['ts_code'].isin(valid_codes)]
+    if not stock_list.empty and exclude_rules:
+        df = _apply_excludes(df, stock_list, exclude_rules)
 
-    # 3. 基础过滤
-    df = df[df['pe_ttm'].notna() & (df['pe_ttm'] > cfg_min_pe)]
-    df = df[df['pe_ttm'] <= max_pe]
-    df = df[df['pb'].notna() & (df['pb'] > 0)]
-    df = df[df['total_mv'].notna() & (df['total_mv'] >= min_market_cap * 10000)]
-    df['dv'] = df['dv_ttm'].fillna(df['dv_ratio']).fillna(0)
-    df = df[df['dv'] > 0]
+    # 2.5 加载预计算截面因子 (优先) 或在线计算 (兜底)
+    factors_df = api.get_factors(latest_date, latest_date)
+    if not factors_df.empty:
+        factor_cols = [c for c in factors_df.columns if c not in ('ts_code', 'trade_date')]
+        new_cols = [c for c in factor_cols if c not in df.columns]
+        if new_cols:
+            df = df.merge(
+                factors_df[['ts_code'] + new_cols],
+                on='ts_code', how='left',
+            )
+        logger.debug(f"使用预计算截面因子: {new_cols}")
+    else:
+        # 兜底: 在线计算
+        from src.engine.factors import FactorRegistry
+        factor_registry = FactorRegistry(strategy_dir=config.strategy_dir)
+        df = factor_registry.compute_all(df)
+        logger.debug("使用在线因子计算 (建议运行 update-factors 预计算)")
+
+    # 2.6 加载预计算时序因子 (静态属性, 按 ts_code 合并)
+    ts_factors_df = api.get_ts_factors()
+    if not ts_factors_df.empty:
+        ts_cols = [c for c in ts_factors_df.columns if c != 'ts_code']
+        new_ts_cols = [c for c in ts_cols if c not in df.columns]
+        if new_ts_cols:
+            df = df.merge(
+                ts_factors_df[['ts_code'] + new_ts_cols],
+                on='ts_code', how='left',
+            )
+        logger.debug(f"使用预计算时序因子: {new_ts_cols}")
+
+    # 3. 声明式过滤
+    df = _apply_filters(df.copy(), filters)
 
     result.after_basic_filter = len(df)
-    print(f"  基础过滤后: {len(df)} 只（排除ST/亏损/高PE/低市值/无股息）")
+    print(f"  基础过滤后: {len(df)} 只")
 
     if df.empty:
         return result
 
-    # 4. 评分和评级
+    # 4. 评分
     df = df.copy()
-    df['turtle_score'] = df.apply(lambda row: _score_turtle(row, weights, ranges), axis=1)
-    df['turtle_rating'] = df.apply(lambda row: _rate_turtle(row, tiers, default_label), axis=1)
+    df['tier_score'] = _compute_scores(df, factors)
 
-    # 5. 排序
-    df = df.sort_values(
-        ['turtle_score', 'dv', 'pb'],
-        ascending=[False, False, True],
-    )
+    # 5. 分级
+    df['tier_rating'] = _compute_tiers(df, tiers, default_label)
 
-    # 6. 取top_n
+    # 6. 排序 — 按综合得分降序
+    sort_cols = ['tier_score']
+    sort_asc = [False]
+    # 如果有评分因子，用第一个 higher_better=False 的字段做次排序
+    for f in factors:
+        if f['field'] in df.columns:
+            sort_cols.append(f['field'])
+            sort_asc.append(f.get('lower_better', False))
+            break
+
+    df = df.sort_values(sort_cols, ascending=sort_asc)
+
+    # 7. 取 top_n
     candidates = df.head(top_n).copy()
 
-    # 7. 补充股票名称
+    # 8. 补充股票名称
     if not stock_list.empty:
         name_map = stock_list.set_index('ts_code')['name'].to_dict()
         candidates['stock_name'] = candidates['ts_code'].map(name_map)
     else:
         candidates['stock_name'] = ''
 
-    output_cols = [
-        'ts_code', 'stock_name', 'trade_date',
-        'pe_ttm', 'pb', 'dv', 'total_mv',
-        'turtle_score', 'turtle_rating',
-    ]
-    existing = [c for c in output_cols if c in candidates.columns]
-    candidates = candidates[existing].reset_index(drop=True)
+    # 9. 整理输出列
+    base_cols = ['ts_code', 'stock_name', 'trade_date']
+    factor_fields = [f['field'] for f in factors if f['field'] in candidates.columns]
+    filter_fields = [f['field'] for f in filters if f['field'] in candidates.columns and f['field'] not in factor_fields]
+    score_cols = ['tier_score', 'tier_rating']
+    output_cols = base_cols + filter_fields + factor_fields + ['total_mv'] + score_cols
+    # 去重保序
+    seen = set()
+    unique_cols = []
+    for c in output_cols:
+        if c not in seen and c in candidates.columns:
+            seen.add(c)
+            unique_cols.append(c)
+    candidates = candidates[unique_cols].reset_index(drop=True)
 
     if 'total_mv' in candidates.columns:
         candidates['total_mv_yi'] = (candidates['total_mv'] / 10000).round(2)
@@ -191,53 +324,6 @@ def screen_at_date(
     print(f"  候选: {len(candidates)} 只")
 
     return result
-
-
-def _score_turtle(row, weights=None, ranges=None) -> float:
-    """评分（0-100）"""
-    if weights is None:
-        weights = _DEFAULT_SCORING_WEIGHTS
-    if ranges is None:
-        ranges = _DEFAULT_SCORING_RANGES
-
-    pe = row.get('pe_ttm', 99)
-    pb = row.get('pb', 99)
-    dv = row.get('dv', 0)
-
-    pe_full = ranges.get('pe_full', 6)
-    pe_zero = ranges.get('pe_zero', 15)
-    pb_full = ranges.get('pb_full', 0.5)
-    pb_zero = ranges.get('pb_zero', 1.5)
-    dv_zero = ranges.get('dv_zero', 2)
-    dv_full = ranges.get('dv_full', 8)
-
-    pe_score = max(0, min(100, (pe_zero - pe) / (pe_zero - pe_full) * 100))
-    pb_score = max(0, min(100, (pb_zero - pb) / (pb_zero - pb_full) * 100))
-    dv_score = max(0, min(100, (dv - dv_zero) / (dv_full - dv_zero) * 100))
-
-    return round(
-        pe_score * weights.get('pe', 0.3) +
-        pb_score * weights.get('pb', 0.3) +
-        dv_score * weights.get('dv', 0.4),
-        1
-    )
-
-
-def _rate_turtle(row, tiers=None, default_label=None) -> str:
-    """根据阈值判定评级"""
-    if tiers is None:
-        tiers = _DEFAULT_TIERS
-    if default_label is None:
-        default_label = _DEFAULT_TIER_LABEL
-
-    pe = row.get('pe_ttm', 99)
-    pb = row.get('pb', 99)
-    dv = row.get('dv', 0)
-
-    for tier in tiers:
-        if pe <= tier['pe_max'] and pb <= tier['pb_max'] and dv >= tier['dv_min']:
-            return tier['name']
-    return default_label
 
 
 def format_screen_result(result: ScreenResult) -> str:
@@ -255,66 +341,33 @@ def format_screen_result(result: ScreenResult) -> str:
         lines.append("（无候选）")
         return '\n'.join(lines)
 
-    turtle_counts = result.candidates['turtle_rating'].value_counts()
-    lines.append("## 评级分布")
-    for rating in turtle_counts.index:
-        count = turtle_counts.get(rating, 0)
-        if count > 0:
-            lines.append(f"- {rating}: {count} 只")
-    lines.append("")
+    if 'tier_rating' in result.candidates.columns:
+        tier_counts = result.candidates['tier_rating'].value_counts()
+        lines.append("## 评级分布")
+        for rating in tier_counts.index:
+            count = tier_counts.get(rating, 0)
+            if count > 0:
+                lines.append(f"- {rating}: {count} 只")
+        lines.append("")
 
+    # 动态表头
+    df = result.candidates
     lines.append("## 候选列表")
-    lines.append("| 排名 | 代码 | 名称 | PE(TTM) | PB | 股息率% | 市值(亿) | 评分 | 评级 |")
-    lines.append("|------|------|------|---------|-----|---------|----------|------|------|")
 
-    for i, (_, row) in enumerate(result.candidates.iterrows(), 1):
-        lines.append(
-            f"| {i} "
-            f"| {row.get('ts_code', '')} "
-            f"| {row.get('stock_name', '')} "
-            f"| {row.get('pe_ttm', 0):.1f} "
-            f"| {row.get('pb', 0):.2f} "
-            f"| {row.get('dv', 0):.2f} "
-            f"| {row.get('total_mv_yi', 0):.0f} "
-            f"| {row.get('turtle_score', 0):.1f} "
-            f"| {row.get('turtle_rating', '')} |"
-        )
+    display_cols = [c for c in df.columns if c not in ('trade_date', 'total_mv')]
+    header = "| 排名 | " + " | ".join(display_cols) + " |"
+    sep = "|------" + "|------" * len(display_cols) + "|"
+    lines.append(header)
+    lines.append(sep)
+
+    for i, (_, row) in enumerate(df.iterrows(), 1):
+        vals = []
+        for c in display_cols:
+            v = row.get(c, '')
+            if isinstance(v, float):
+                vals.append(f"{v:.2f}")
+            else:
+                vals.append(str(v))
+        lines.append(f"| {i} | " + " | ".join(vals) + " |")
 
     return '\n'.join(lines)
-
-
-# ==================== CLI ====================
-
-def main():
-    import sys
-    args = sys.argv[1:]
-    if not args:
-        print("用法: python -m src.screener.quick_filter <cutoff_date> [--top N] [--strategy <yaml>]")
-        print("示例: python -m src.screener.quick_filter 2024-06-30")
-        print("      python -m src.screener.quick_filter 2024-06-30 --top 30")
-        sys.exit(1)
-
-    cutoff_date = args[0]
-    top_n = 50
-    config = None
-
-    if '--top' in args:
-        idx = args.index('--top')
-        if idx + 1 < len(args):
-            top_n = int(args[idx + 1])
-
-    if '--strategy' in args:
-        idx = args.index('--strategy')
-        if idx + 1 < len(args):
-            from src.engine.config import StrategyConfig
-            config = StrategyConfig.from_yaml(args[idx + 1])
-            print(f"使用策略: {config.name}")
-
-    print(f"量化筛选: {cutoff_date} (top {top_n})")
-    result = screen_at_date(cutoff_date, top_n=top_n, config=config)
-    print()
-    print(format_screen_result(result))
-
-
-if __name__ == '__main__':
-    main()

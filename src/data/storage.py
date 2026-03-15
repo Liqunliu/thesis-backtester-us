@@ -2,9 +2,14 @@
 Parquet 本地存储
 
 目录约定:
-    tushare/basic/          单文件，全量覆盖
-    tushare/daily/{sub}/    按月分区，如 2024-01.parquet
-    financial/{sub}/        按报告期分区，如 2024-06.parquet
+    data/tushare/basic/            单文件，全量覆盖 (stock_list, trade_calendar)
+    data/tushare/daily/{sub}/      按月分区，如 2024-01.parquet
+    data/tushare/daily/factors/    预计算截面因子 (月分区)
+    data/tushare/daily/ts_factors/ 预计算时序因子 (latest.parquet)
+    data/financial/{sub}/          按股票分区，如 601288.SH.parquet
+
+CLI (通过 launcher 间接使用):
+    python -m src.engine.launcher data status          # 查看各分区数据状态
 """
 from pathlib import Path
 from typing import List, Optional
@@ -129,15 +134,21 @@ def load(
     partitions: List[str],
     columns: List[str] = None,
     base_dir: Path = None,
+    filters: list = None,
 ) -> pd.DataFrame:
-    """加载数据（支持多分区）"""
+    """加载数据（支持多分区）
+
+    Args:
+        filters: PyArrow 行过滤条件，如 [('ts_code', '==', '601288.SH')]
+                 在 parquet 读取层下推，避免全量加载。
+    """
     if base_dir is None:
         base_dir = TUSHARE_DATA_DIR
     dfs = []
     for p in partitions:
         path = get_path(category, sub, p, base_dir)
         if path.exists():
-            dfs.append(pd.read_parquet(path, columns=columns))
+            dfs.append(pd.read_parquet(path, columns=columns, filters=filters))
 
     if not dfs:
         return pd.DataFrame()

@@ -19,7 +19,7 @@ from typing import Dict, Any, Optional, List
 from dataclasses import dataclass, field
 
 from src.data.settings import ANALYSIS_DB_PATH
-from src.analyzer.analysis_runner import init_db
+from src.engine.tracker import init_db
 from .outcome_collector import ForwardOutcome, collect_outcomes_for_run
 
 

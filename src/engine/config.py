@@ -1,15 +1,12 @@
 """
 策略配置加载器
 
-从 YAML 文件加载投资策略的完整配置，包括：
-- 筛选条件（龟级阈值、基础过滤）
-- 分析框架（章节定义、版本信息）
-- 盲测参数（评分提取、阈值）
-- 回测参数（前向收益周期）
+从 YAML 文件加载投资策略的完整配置。
+支持新格式（meta/paths/screening.filters 声明式）和旧格式的向后兼容。
 
 用法:
-    config = StrategyConfig.from_yaml("strategies/v556_value/strategy.yaml")
-    config.get_screening_config()
+    config = StrategyConfig.from_yaml("strategies/v6_value/strategy.yaml")
+    config.get_filters()
     config.get_chapter_defs()
 """
 import importlib
@@ -43,117 +40,206 @@ class StrategyConfig:
         with open(path, 'r', encoding='utf-8') as f:
             raw = yaml.safe_load(f)
 
-        return cls(
-            name=raw.get('name', ''),
-            version=raw.get('version', ''),
-            yaml_path=path,
-            raw=raw,
-        )
+        # 兼容新格式 (meta.name) 和旧格式 (name)
+        meta = raw.get('meta', {})
+        name = meta.get('name', '') or raw.get('name', '')
+        version = meta.get('version', '') or raw.get('version', '')
+
+        return cls(name=name, version=version, yaml_path=path, raw=raw)
+
+    def save(self):
+        """保存配置回 YAML 文件"""
+        with open(self.yaml_path, 'w', encoding='utf-8') as f:
+            yaml.dump(self.raw, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
     @property
     def strategy_dir(self) -> Path:
         """策略目录（YAML 所在目录）"""
         return self.yaml_path.parent
 
+    # ==================== 路径 ====================
+
+    def _paths(self) -> dict:
+        return self.raw.get('paths', {})
+
     def get_template_path(self) -> Path:
         """获取投资模版文件路径"""
-        rel = self.raw.get('template_path', 'template.md')
-        p = self.strategy_dir / rel
-        return p.resolve()
+        rel = self._paths().get('template') or self.raw.get('template_path', 'template.md')
+        return (self.strategy_dir / rel).resolve()
 
     def get_chunks_dir(self) -> Path:
         """获取解析后章节文件目录"""
-        rel = self.raw.get('chunks_dir', 'chunks')
+        rel = self._paths().get('chunks_dir') or self.raw.get('chunks_dir', 'chunks')
+        return self.strategy_dir / rel
+
+    def get_chapters_path(self) -> Path:
+        """获取 chapters.yaml 路径"""
+        rel = self._paths().get('chapters', 'chapters.yaml')
         return self.strategy_dir / rel
 
     def get_backtest_dir(self) -> Path:
-        """获取回测数据目录（样本、prompt、报告、验证结果）"""
-        rel = self.raw.get('backtest_dir', 'backtest')
+        """获取回测数据目录"""
+        rel = self._paths().get('backtest_dir') or self.raw.get('backtest_dir', 'backtest')
         return self.strategy_dir / rel
 
+    def get_output_schema_module(self) -> str:
+        """获取输出 schema 模块路径"""
+        return self._paths().get('output_schema') or self.raw.get('output_schema_module', '')
+
+    # ==================== 分析框架 ====================
+
     def get_chapter_defs(self) -> List[dict]:
-        """获取章节定义列表"""
+        """获取章节定义列表 — 优先从独立 chapters.yaml 加载"""
+        # 1. 尝试独立文件
+        chapters_path = self.get_chapters_path()
+        if chapters_path.exists():
+            with open(chapters_path, 'r', encoding='utf-8') as f:
+                data = yaml.safe_load(f)
+            if data and 'chapters' in data:
+                return data['chapters']
+
+        # 2. 回退到内联定义
         framework = self.raw.get('framework', {})
         return framework.get('chapters', [])
 
+    def get_operator_registry(self):
+        """获取算子注册表 (延迟导入避免循环依赖)"""
+        from .operators import OperatorRegistry
+        return OperatorRegistry(strategy_dir=self.strategy_dir)
+
+    def get_chapter_focus(self, chapter_def: dict) -> str:
+        """获取章节的分析重点 — 优先从算子组合, 回退到 focus 字段"""
+        operators = chapter_def.get('operators', [])
+        if operators:
+            registry = self.get_operator_registry()
+            return registry.compose_content(operators)
+        return chapter_def.get('focus', '')
+
+    def get_chapter_data_needed(self, chapter_def: dict) -> List[str]:
+        """获取章节所需数据 — 优先从算子推导, 回退到 data_needed 字段"""
+        operators = chapter_def.get('operators', [])
+        if operators:
+            registry = self.get_operator_registry()
+            return registry.compose_data_needed(operators)
+        return chapter_def.get('data_needed', [])
+
     def get_version_string(self) -> str:
-        """获取框架版本字符串（用于 prompt 注入）"""
         framework = self.raw.get('framework', {})
         return framework.get('version_string', self.name)
 
     def get_analyst_role(self) -> str:
-        """获取分析师角色描述"""
         framework = self.raw.get('framework', {})
-        return framework.get('analyst_role', '严谨的投资分析师')
+        return framework.get('analyst_role', '投资分析师')
 
     def get_synthesis_fields(self) -> List[str]:
-        """获取综合研判输出字段列表"""
         framework = self.raw.get('framework', {})
         return framework.get('synthesis_fields', [])
 
+    # ==================== 声明式筛选 ====================
+
     def get_screening_config(self) -> dict:
-        """获取筛选配置"""
         return self.raw.get('screening', {})
 
+    def get_exclude_rules(self) -> List[dict]:
+        """获取排除规则"""
+        return self.get_screening_config().get('exclude', [])
+
+    def get_filters(self) -> List[dict]:
+        """获取声明式过滤条件"""
+        sc = self.get_screening_config()
+        filters = sc.get('filters', [])
+        if filters:
+            return filters
+        # 旧格式兼容: 从 min_market_cap/max_pe/min_pe 转换
+        legacy = []
+        if 'max_pe' in sc or 'min_pe' in sc:
+            f = {'field': 'pe_ttm'}
+            if 'min_pe' in sc:
+                f['min'] = sc['min_pe'] or 0.01
+            if 'max_pe' in sc:
+                f['max'] = sc['max_pe']
+            legacy.append(f)
+        if 'min_market_cap' in sc:
+            legacy.append({'field': 'total_mv', 'min': sc['min_market_cap'] * 10000})
+        return legacy
+
+    def get_scoring_factors(self) -> List[dict]:
+        """获取评分因子"""
+        sc = self.get_screening_config()
+        scoring = sc.get('scoring', {})
+        factors = scoring.get('factors', [])
+        if factors:
+            return factors
+        # 旧格式兼容
+        weights = sc.get('scoring_weights', {})
+        ranges = sc.get('scoring_ranges', {})
+        if weights and ranges:
+            return [
+                {'field': 'pe_ttm', 'weight': weights.get('pe', 0.3), 'lower_better': True,
+                 'full': ranges.get('pe_full', 6), 'zero': ranges.get('pe_zero', 15)},
+                {'field': 'pb', 'weight': weights.get('pb', 0.3), 'lower_better': True,
+                 'full': ranges.get('pb_full', 0.5), 'zero': ranges.get('pb_zero', 1.5)},
+                {'field': 'dv', 'weight': weights.get('dv', 0.4), 'lower_better': False,
+                 'full': ranges.get('dv_full', 8), 'zero': ranges.get('dv_zero', 2)},
+            ]
+        return []
+
     def get_tiers(self) -> List[dict]:
-        """获取龟级/评级层定义"""
-        screening = self.get_screening_config()
-        return screening.get('tiers', [])
-
-    def get_scoring_weights(self) -> dict:
-        """获取评分权重"""
-        screening = self.get_screening_config()
-        return screening.get('scoring_weights', {'pe': 0.3, 'pb': 0.3, 'dv': 0.4})
-
-    def get_scoring_ranges(self) -> dict:
-        """获取评分满分/零分区间"""
-        screening = self.get_screening_config()
-        return screening.get('scoring_ranges', {
-            'pe_full': 6, 'pe_zero': 15,
-            'pb_full': 0.5, 'pb_zero': 1.5,
-            'dv_zero': 2, 'dv_full': 8,
-        })
+        """获取分级定义"""
+        sc = self.get_screening_config()
+        scoring = sc.get('scoring', {})
+        tiers = scoring.get('tiers', [])
+        if tiers:
+            return tiers
+        # 旧格式兼容: tiers 在 screening 顶层
+        return sc.get('tiers', [])
 
     def get_default_tier_label(self) -> str:
-        """不达标时的标签"""
-        screening = self.get_screening_config()
-        return screening.get('default_tier_label', '不达标')
+        sc = self.get_screening_config()
+        scoring = sc.get('scoring', {})
+        return scoring.get('default_tier', sc.get('default_tier_label', '不达标'))
+
+    # 旧接口兼容 — 供尚未迁移的模块使用
+    def get_scoring_weights(self) -> dict:
+        factors = self.get_scoring_factors()
+        return {f['field']: f['weight'] for f in factors} if factors else {}
+
+    def get_scoring_ranges(self) -> dict:
+        factors = self.get_scoring_factors()
+        result = {}
+        for f in factors:
+            field = f['field']
+            result[f'{field}_full'] = f.get('full', 0)
+            result[f'{field}_zero'] = f.get('zero', 0)
+        return result
+
+    # ==================== 盲测配置 ====================
 
     def get_blind_test_config(self) -> dict:
-        """获取盲测配置"""
         return self.raw.get('blind_test', {})
 
     def get_score_patterns(self) -> List[str]:
-        """获取评分提取正则列表"""
         bt = self.get_blind_test_config()
-        return bt.get('score_patterns', [
-            r'综合评分[：:]\s*\**(\d+)/100\**',
-            r'综合评分[：:]\s*\**(\d+)\**\s*/\s*100',
-            r'\*\*(\d+)/100\*\*',
-            r'(\d+)/100',
-        ])
+        return bt.get('score_patterns', [])
 
     def get_recommendation_config(self) -> dict:
-        """获取建议提取配置"""
         bt = self.get_blind_test_config()
         return bt.get('recommendation', {})
 
     def get_thresholds(self) -> dict:
-        """获取判断阈值"""
         bt = self.get_blind_test_config()
-        return bt.get('thresholds', {
-            'buy_score_min': 60,
-            'avoid_score_max': 50,
-            'false_positive_return': -10,
-            'false_negative_return': 10,
-        })
+        return bt.get('thresholds', {})
+
+    # ==================== 回测配置 ====================
 
     def get_backtest_config(self) -> dict:
-        """获取回测配置"""
         return self.raw.get('backtest', {})
 
+    def get_cross_section_interval(self) -> str:
+        bt = self.get_backtest_config()
+        return bt.get('cross_section_interval', '6m')
+
     def get_forward_periods(self) -> List[dict]:
-        """获取前向收益周期列表"""
         bt = self.get_backtest_config()
         return bt.get('forward_periods', [
             {'months': 1, 'label': '1个月'},
@@ -162,9 +248,11 @@ class StrategyConfig:
             {'months': 12, 'label': '12个月'},
         ])
 
+    # ==================== Schema ====================
+
     def get_schema_map(self) -> Dict[str, type]:
-        """动态加载输出 schema 模块，返回 chapter_id -> schema_class 映射"""
-        module_path = self.raw.get('output_schema_module')
+        """动态加载输出 schema 模块"""
+        module_path = self.get_output_schema_module()
         if not module_path:
             return {}
 
@@ -173,7 +261,6 @@ class StrategyConfig:
         schema_map = {}
         for ch_def in self.get_chapter_defs():
             ch_id = ch_def['id']
-            # 约定: ch01_data_verify -> Ch01Output
             ch_num = ch_def.get('chapter', 0)
             class_name = f"Ch{ch_num:02d}Output"
             cls = getattr(mod, class_name, None)
@@ -182,20 +269,18 @@ class StrategyConfig:
 
         return schema_map
 
+    # ==================== 报告/数据库 ====================
+
     def get_report_config(self) -> dict:
-        """获取报告配置"""
         bt = self.get_blind_test_config()
         return {
             'title': bt.get('report_title', '盲测AI分析验证报告'),
-            'cross_section_label': bt.get('cross_section_label', '截面'),
         }
 
     def get_database_config(self) -> dict:
-        """获取数据库配置"""
         return self.raw.get('database', {})
 
     def get_framework_version_tag(self) -> str:
-        """获取存入数据库的框架版本标签"""
         db = self.get_database_config()
         return db.get('framework_version_tag', self.version)
 
@@ -206,15 +291,15 @@ _DEFAULT_CONFIG: Optional[StrategyConfig] = None
 
 
 def get_default_config() -> StrategyConfig:
-    """获取默认策略配置（V5.5.6）"""
+    """获取默认策略配置"""
     global _DEFAULT_CONFIG
     if _DEFAULT_CONFIG is None:
-        default_yaml = PROJECT_ROOT / "strategies" / "v556_value" / "strategy.yaml"
+        default_yaml = PROJECT_ROOT / "strategies" / "v6_value" / "strategy.yaml"
         if default_yaml.exists():
             _DEFAULT_CONFIG = StrategyConfig.from_yaml(default_yaml)
         else:
             raise FileNotFoundError(
                 f"默认策略配置不存在: {default_yaml}\n"
-                "请确保 strategies/v556_value/strategy.yaml 已创建"
+                "请确保 strategies/v6_value/strategy.yaml 已创建"
             )
     return _DEFAULT_CONFIG
