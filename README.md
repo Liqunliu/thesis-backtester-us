@@ -125,12 +125,12 @@ graph LR
 
 ```mermaid
 graph LR
-    A[算子层<br/>21 个算子<br/>解决"看什么"] --> B[章节层<br/>6 章 DAG<br/>解决"看的顺序"]
-    B --> C[综合层<br/>思考步骤 + 评分锚点<br/>解决"怎么判断"]
+    A[算子层 - 21 个算子<br/>解决 看什么] --> B[章节层 - 6 章 DAG<br/>解决 看的顺序]
+    B --> C[综合层<br/>思考步骤 + 评分锚点<br/>解决 怎么判断]
     C --> D{评分 0-100}
-    D -->|≥70| BUY[买入]
-    D -->|30-69| WATCH[观望]
-    D -->|≤29| AVOID[回避]
+    D -->|≥ 70| BUY[买入]
+    D -->|30 - 69| WATCH[观望]
+    D -->|≤ 29| AVOID[回避]
 
     style BUY fill:#4CAF50,color:#fff
     style WATCH fill:#FF9800,color:#fff
