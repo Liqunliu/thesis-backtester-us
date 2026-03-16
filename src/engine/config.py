@@ -281,6 +281,18 @@ class StrategyConfig:
             {'months': 12, 'label': '12个月'},
         ])
 
+    def get_backtest_start(self) -> str:
+        return self.get_backtest_config().get('start_date', '2022-06-30')
+
+    def get_backtest_end(self) -> str:
+        return self.get_backtest_config().get('end_date', '2024-06-30')
+
+    def get_backtest_top_n(self) -> int:
+        return self.get_backtest_config().get('top_n', 50)
+
+    def get_agent_concurrency(self) -> int:
+        return self.get_backtest_config().get('agent_concurrency', 3)
+
     # ==================== Schema ====================
 
     def get_schema_map(self) -> Dict[str, type]:

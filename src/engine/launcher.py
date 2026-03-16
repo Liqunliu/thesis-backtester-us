@@ -71,6 +71,9 @@ def _print_usage():
     print("  screen <cutoff_date> [--top N]        量化筛选")
     print("  agent-analyze <ts_code> <cutoff_date> Agent驱动的自动分析")
     print("  batch-analyze <cutoff_date> [--top N]  筛选+批量Agent分析")
+    print("  backtest-screen                        生成截面日期+逐截面筛选+保存CSV")
+    print("  backtest-agent  [--retry N]            并发Agent分析(增量/重试/进度)")
+    print("  backtest-eval                          采集前向收益+多基准绩效评估")
     print()
     print("数据命令:")
     print("  data update-daily [start] [end]       增量更新日线行情")
@@ -100,6 +103,12 @@ def _dispatch_strategy(config: StrategyConfig, command: str, args: list):
         _cmd_agent_analyze(config, args)
     elif command == "batch-analyze":
         _cmd_batch_analyze(config, args)
+    elif command == "backtest-screen":
+        _cmd_backtest_screen(config, args)
+    elif command == "backtest-agent":
+        _cmd_backtest_agent(config, args)
+    elif command == "backtest-eval":
+        _cmd_backtest_eval(config, args)
     else:
         print(f"未知策略命令: {command}")
         sys.exit(1)
@@ -341,6 +350,29 @@ def _cmd_batch_analyze(config: StrategyConfig, args: list):
     print(f"{'-'*12} {'-'*8} {'-'*8} {'-'*8}")
     for s in summaries:
         print(f"{s['ts_code']:<12} {str(s['score']):<8} {str(s['recommendation']):<8} {s['elapsed']}s")
+
+
+def _cmd_backtest_screen(config: StrategyConfig, args: list):
+    """Step 1: 生成截面日期 + 逐截面筛选 + 保存 CSV"""
+    from src.backtest.pipeline import step_screen
+    step_screen(config)
+
+
+def _cmd_backtest_agent(config: StrategyConfig, args: list):
+    """Step 2: 并发 Agent 分析 (增量/重试/进度)"""
+    from src.backtest.pipeline import step_agent
+    max_retry = 1
+    if '--retry' in args:
+        idx = args.index('--retry')
+        if idx + 1 < len(args):
+            max_retry = int(args[idx + 1])
+    step_agent(config, max_retry=max_retry)
+
+
+def _cmd_backtest_eval(config: StrategyConfig, args: list):
+    """Step 3: 采集前向收益 + 多基准绩效评估"""
+    from src.backtest.pipeline import step_eval
+    step_eval(config)
 
 
 if __name__ == '__main__':

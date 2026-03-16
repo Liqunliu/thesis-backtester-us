@@ -1,0 +1,649 @@
+"""
+回测 Pipeline — 三步独立执行
+
+Step 1: backtest-screen  → 日期生成 + 逐截面筛选 + 保存 CSV
+Step 2: backtest-agent   → 读 CSV + 并发 Agent 分析 + 进度/重试/增量
+Step 3: backtest-eval    → 读报告 + 采集前向收益 + 多基准绩效评估
+
+用法:
+    python -m src.engine.launcher strategies/v6_value/strategy.yaml backtest-screen
+    python -m src.engine.launcher strategies/v6_value/strategy.yaml backtest-agent
+    python -m src.engine.launcher strategies/v6_value/strategy.yaml backtest-eval
+"""
+import asyncio
+import json
+import time
+import calendar
+from dataclasses import dataclass, field
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+from pathlib import Path
+from typing import List, Dict, Optional, TYPE_CHECKING
+
+import pandas as pd
+
+if TYPE_CHECKING:
+    from src.engine.config import StrategyConfig
+
+
+# ==================== 共享工具 ====================
+
+def _parse_interval(interval: str) -> relativedelta:
+    """解析间隔字符串: '6m' → relativedelta(months=6)"""
+    s = interval.strip().lower()
+    if s.endswith('m'):
+        return relativedelta(months=int(s[:-1]))
+    elif s.endswith('y'):
+        return relativedelta(years=int(s[:-1]))
+    elif s.endswith('w'):
+        return relativedelta(weeks=int(s[:-1]))
+    raise ValueError(f"无法解析间隔: {interval} (支持格式: 6m, 1y, 2w)")
+
+
+def generate_crosssection_dates(
+    start_date: str,
+    end_date: str,
+    interval: str,
+) -> List[str]:
+    """从起止日期和间隔生成截面日期列表，月级间隔自动对齐月末"""
+    delta = _parse_interval(interval)
+    start = datetime.strptime(start_date, '%Y-%m-%d')
+    end = datetime.strptime(end_date, '%Y-%m-%d')
+    today = datetime.now()
+
+    dates = []
+    current = start
+    while current <= end and current <= today:
+        if hasattr(delta, 'months') and (delta.months or delta.years):
+            last_day = calendar.monthrange(current.year, current.month)[1]
+            snapped = current.replace(day=last_day)
+        else:
+            snapped = current
+        dates.append(snapped.strftime('%Y-%m-%d'))
+        current += delta
+
+    return dates
+
+
+def _bt_dirs(config: "StrategyConfig"):
+    """返回 (screen_dir, reports_dir, bt_dir)"""
+    bt_dir = config.get_backtest_dir()
+    return bt_dir / "screen_results", bt_dir / "agent_reports", bt_dir
+
+
+def save_screen_csv(candidates: pd.DataFrame, cutoff_date: str, screen_dir: Path) -> Path:
+    """保存筛选结果到 CSV"""
+    screen_dir.mkdir(parents=True, exist_ok=True)
+    path = screen_dir / f"screen_{cutoff_date}.csv"
+    candidates.to_csv(path, index=False, encoding='utf-8-sig')
+    return path
+
+
+def load_screen_csv(cutoff_date: str, screen_dir: Path) -> Optional[pd.DataFrame]:
+    """加载已保存的筛选结果"""
+    path = screen_dir / f"screen_{cutoff_date}.csv"
+    if path.exists():
+        return pd.read_csv(path, dtype={'ts_code': str})
+    return None
+
+
+def load_agent_reports(reports_dir: Path, cutoff_date: str) -> Dict[str, dict]:
+    """加载指定截面的所有 agent structured.json，返回 {ts_code: data}"""
+    results = {}
+    if not reports_dir.exists():
+        return results
+    for f in reports_dir.glob(f"*_{cutoff_date}_structured.json"):
+        try:
+            data = json.loads(f.read_text(encoding='utf-8'))
+            ts_code = data.get('metadata', {}).get('ts_code', '')
+            if ts_code:
+                results[ts_code] = data
+        except Exception:
+            continue
+    return results
+
+
+# ==================== Step 1: backtest-screen ====================
+
+def step_screen(config: "StrategyConfig") -> List[str]:
+    """
+    生成截面日期 + 逐截面筛选 + 保存 CSV
+
+    Returns:
+        生成的截面日期列表
+    """
+    from src.screener.quick_filter import screen_at_date
+
+    dates = generate_crosssection_dates(
+        config.get_backtest_start(),
+        config.get_backtest_end(),
+        config.get_cross_section_interval(),
+    )
+    top_n = config.get_backtest_top_n()
+    screen_dir, _, _ = _bt_dirs(config)
+
+    print(f"回测筛选: {config.name} v{config.version}")
+    print(f"  截面: {len(dates)} 个 ({dates[0]} ~ {dates[-1]})")
+    print(f"  间隔: {config.get_cross_section_interval()}")
+    print(f"  候选数: top {top_n}")
+    print(f"  输出: {screen_dir}")
+    print()
+
+    for i, date in enumerate(dates, 1):
+        print(f"[{i}/{len(dates)}] {date}")
+        screen = screen_at_date(date, top_n=top_n, config=config)
+        if not screen.candidates.empty:
+            csv_path = save_screen_csv(screen.candidates, date, screen_dir)
+            n = len(screen.candidates)
+            tier_info = ""
+            if 'tier_rating' in screen.candidates.columns:
+                dist = screen.candidates['tier_rating'].value_counts()
+                tier_info = " | " + ", ".join(f"{k}:{v}" for k, v in dist.items())
+            print(f"  → {n} 只{tier_info} → {csv_path.name}")
+        else:
+            print(f"  → 无候选")
+
+    print(f"\n完成: {len(dates)} 个截面筛选结果已保存到 {screen_dir}")
+    return dates
+
+
+# ==================== Step 2: backtest-agent ====================
+
+@dataclass
+class AgentProgress:
+    """Agent 批量分析进度追踪"""
+    total: int = 0
+    completed: int = 0
+    failed: int = 0
+    failed_list: List[Dict[str, str]] = field(default_factory=list)
+    start_time: float = 0.0
+
+    def tick_ok(self, ts_code: str, score, rec, elapsed):
+        self.completed += 1
+        pct = (self.completed + self.failed) / self.total * 100
+        eta = self._eta()
+        print(f"  ✓ [{self.completed + self.failed}/{self.total} {pct:.0f}%] "
+              f"{ts_code} | {score}分 | {rec} | {elapsed:.0f}s | ETA {eta}")
+
+    def tick_fail(self, ts_code: str, cutoff_date: str, error: str):
+        self.failed += 1
+        self.failed_list.append({'ts_code': ts_code, 'cutoff_date': cutoff_date, 'error': error})
+        pct = (self.completed + self.failed) / self.total * 100
+        print(f"  ✗ [{self.completed + self.failed}/{self.total} {pct:.0f}%] "
+              f"{ts_code} | 失败: {error[:80]}")
+
+    def _eta(self) -> str:
+        elapsed = time.time() - self.start_time
+        done = self.completed + self.failed
+        if done == 0:
+            return "?"
+        remaining = (elapsed / done) * (self.total - done)
+        if remaining > 3600:
+            return f"{remaining/3600:.1f}h"
+        return f"{remaining/60:.0f}min"
+
+
+def step_agent(config: "StrategyConfig", max_retry: int = 1) -> AgentProgress:
+    """
+    读取筛选 CSV → 并发 Agent 分析 → 保存报告
+
+    自动增量：跳过已有报告的股票。
+    失败汇总：打印未跑通的列表，再次运行自动重试。
+
+    Args:
+        config: 策略配置
+        max_retry: 失败后最大重试轮数
+
+    Returns:
+        AgentProgress 包含完成/失败统计
+    """
+    screen_dir, reports_dir, _ = _bt_dirs(config)
+    dates = generate_crosssection_dates(
+        config.get_backtest_start(),
+        config.get_backtest_end(),
+        config.get_cross_section_interval(),
+    )
+    concurrency = config.get_agent_concurrency()
+
+    # 收集所有待分析任务
+    tasks = []  # [(ts_code, cutoff_date)]
+    for date in dates:
+        df = load_screen_csv(date, screen_dir)
+        if df is None:
+            print(f"警告: {date} 无筛选结果，请先运行 backtest-screen")
+            continue
+
+        batch_n = config.get_agent_batch_size(len(df))
+        codes = df['ts_code'].head(batch_n).tolist()
+
+        # 跳过已有报告
+        existing = load_agent_reports(reports_dir, date)
+        new_codes = [c for c in codes if c not in existing]
+        skipped = len(codes) - len(new_codes)
+        if skipped:
+            print(f"{date}: {skipped} 只已有报告, {len(new_codes)} 只待分析")
+        for c in new_codes:
+            tasks.append((c, date))
+
+    if not tasks:
+        print("所有截面的 Agent 分析均已完成，无需重新运行。")
+        return AgentProgress()
+
+    print(f"\nAgent 批量分析")
+    print(f"  待分析: {len(tasks)} 只")
+    print(f"  并发数: {concurrency}")
+    print(f"  报告目录: {reports_dir}")
+    print()
+
+    # 运行（含重试）
+    progress = AgentProgress(total=len(tasks), start_time=time.time())
+
+    for attempt in range(1 + max_retry):
+        if attempt > 0:
+            # 重试轮
+            retry_tasks = [(f['ts_code'], f['cutoff_date']) for f in progress.failed_list]
+            progress.failed = 0
+            progress.failed_list = []
+            tasks = retry_tasks
+            print(f"\n--- 重试第 {attempt} 轮: {len(tasks)} 只 ---\n")
+
+        _run_agent_concurrent(tasks, config, reports_dir, concurrency, progress)
+
+        if not progress.failed_list:
+            break
+
+    # 结果汇总
+    elapsed_total = time.time() - progress.start_time
+    print(f"\n{'='*60}")
+    print(f"Agent 分析完成")
+    print(f"  成功: {progress.completed}/{progress.total}")
+    print(f"  失败: {progress.failed}")
+    print(f"  总耗时: {elapsed_total/60:.1f} 分钟")
+
+    if progress.failed_list:
+        print(f"\n未完成列表 (再次运行 backtest-agent 自动增量重试):")
+        for f in progress.failed_list:
+            print(f"  {f['ts_code']} @ {f['cutoff_date']}: {f['error'][:80]}")
+
+    print(f"{'='*60}")
+    return progress
+
+
+def _run_agent_concurrent(
+    tasks: List[tuple],
+    config: "StrategyConfig",
+    reports_dir: Path,
+    concurrency: int,
+    progress: AgentProgress,
+):
+    """并发执行 Agent 分析任务"""
+    from src.agent.runtime import run_blind_analysis
+
+    async def _run_all():
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def _analyze_one(ts_code: str, cutoff_date: str):
+            async with semaphore:
+                try:
+                    r = await run_blind_analysis(
+                        ts_code, cutoff_date, config, True, reports_dir,
+                    )
+                    syn = r.get('synthesis', {})
+                    score = syn.get('综合评分', '?')
+                    rec = syn.get('最终建议', '?')
+                    elapsed = r.get('metadata', {}).get('elapsed_seconds', 0)
+                    progress.tick_ok(ts_code, score, rec, elapsed)
+                except Exception as e:
+                    progress.tick_fail(ts_code, cutoff_date, str(e))
+
+        coros = [_analyze_one(code, date) for code, date in tasks]
+        await asyncio.gather(*coros)
+
+    asyncio.run(_run_all())
+
+
+# ==================== Step 3: backtest-eval ====================
+
+@dataclass
+class EvalSlice:
+    """评估用的单截面数据"""
+    cutoff_date: str
+    candidates: pd.DataFrame = field(default_factory=pd.DataFrame)
+    agent_reports: Dict[str, dict] = field(default_factory=dict)
+    outcomes: Dict[str, object] = field(default_factory=dict)
+
+
+def step_eval(config: "StrategyConfig") -> Path:
+    """
+    读取筛选 CSV + Agent 报告 → 采集前向收益 → 多基准绩效评估 → 保存报告
+
+    Returns:
+        报告文件路径
+    """
+    from src.backtest.outcome_collector import collect_forward_outcome
+
+    screen_dir, reports_dir, bt_dir = _bt_dirs(config)
+    dates = generate_crosssection_dates(
+        config.get_backtest_start(),
+        config.get_backtest_end(),
+        config.get_cross_section_interval(),
+    )
+    forward_periods = config.get_forward_periods()
+
+    print(f"回测评估: {config.name} v{config.version}")
+    print(f"  截面: {len(dates)} 个")
+    print()
+
+    # 1. 加载数据
+    slices = []
+    for date in dates:
+        df = load_screen_csv(date, screen_dir)
+        if df is None:
+            print(f"  {date}: 无筛选结果，跳过")
+            continue
+        reports = load_agent_reports(reports_dir, date)
+        slices.append(EvalSlice(
+            cutoff_date=date,
+            candidates=df,
+            agent_reports=reports,
+        ))
+        print(f"  {date}: {len(df)} 候选, {len(reports)} 份 Agent 报告")
+
+    if not slices:
+        print("无数据可评估，请先运行 backtest-screen")
+        return bt_dir
+
+    # 2. 采集前向收益
+    print(f"\n采集前向收益...")
+    for sl in slices:
+        codes = sl.candidates['ts_code'].tolist()
+        for ts_code in codes:
+            try:
+                outcome = collect_forward_outcome(ts_code, sl.cutoff_date)
+                sl.outcomes[ts_code] = outcome
+            except Exception as e:
+                pass  # 静默跳过，eval 时标记为 N/A
+
+    # 3. 多基准评估
+    print(f"\n计算绩效...")
+    performance = _evaluate_multi_baseline(slices, config)
+
+    # 4. 生成报告
+    report_text = _format_eval_report(slices, performance, config)
+    ts = datetime.now().strftime('%Y%m%d_%H%M')
+    report_path = bt_dir / f"backtest_report_{ts}.md"
+    report_path.write_text(report_text, encoding='utf-8')
+
+    summary_path = bt_dir / f"backtest_summary_{ts}.json"
+    _save_eval_json(slices, performance, config, summary_path)
+
+    # 5. 打印摘要
+    print(f"\n{'='*60}")
+    print(f"绩效摘要 (6个月前向)")
+    print(f"{'='*60}")
+    for key in ['screen_all', 'screen_top', 'agent_buy', 'agent_top']:
+        bl = performance.get(key, {})
+        stats = bl.get('stats', {}).get('6个月', {})
+        label = bl.get('label', key)
+        if stats.get('count', 0) > 0:
+            print(f"  {label}: "
+                  f"均收益={stats['mean']*100:+.1f}% "
+                  f"胜率={stats['win_rate']*100:.0f}% "
+                  f"样本={stats['count']}")
+        else:
+            print(f"  {label}: 无数据")
+
+    # Alpha
+    s_all = performance.get('screen_all', {}).get('stats', {}).get('6个月', {})
+    s_buy = performance.get('agent_buy', {}).get('stats', {}).get('6个月', {})
+    if s_all.get('mean') is not None and s_buy.get('mean') is not None:
+        alpha = (s_buy['mean'] - s_all['mean']) * 100
+        print(f"\n  Agent Alpha (6m): {alpha:+.1f}pp")
+
+    print(f"\n报告: {report_path}")
+    print(f"数据: {summary_path}")
+    return report_path
+
+
+def _evaluate_multi_baseline(
+    slices: List[EvalSlice],
+    config: "StrategyConfig",
+) -> Dict[str, dict]:
+    """四基准绩效评估"""
+    forward_periods = config.get_forward_periods()
+    tiers = config.get_tiers()
+    top_tier = tiers[0]['name'] if tiers else None
+    buy_threshold = config.get_decision_thresholds().get('buy', 70)
+
+    baselines = {
+        'screen_all': {'label': '筛选池等权', 'desc': '所有通过量化筛选的候选'},
+        'screen_top': {'label': f'筛选池 Top ({top_tier or "最高评级"})', 'desc': '量化筛选最高评级'},
+        'agent_buy': {'label': 'Agent 买入', 'desc': f'Agent 建议"买入" (≥{buy_threshold}分)'},
+        'agent_top': {'label': 'Agent Top5', 'desc': 'Agent 评分最高的5只'},
+    }
+    for key in baselines:
+        baselines[key]['slices'] = []
+
+    for sl in slices:
+        all_codes = sl.candidates['ts_code'].tolist()
+
+        # screen_all
+        baselines['screen_all']['slices'].append(
+            _extract_returns(all_codes, sl, forward_periods)
+        )
+
+        # screen_top
+        if top_tier and 'tier_rating' in sl.candidates.columns:
+            top_codes = sl.candidates[sl.candidates['tier_rating'] == top_tier]['ts_code'].tolist()
+        else:
+            top_codes = all_codes[:10]
+        baselines['screen_top']['slices'].append(
+            _extract_returns(top_codes, sl, forward_periods)
+        )
+
+        # agent_buy
+        buy_codes = []
+        for code, report in sl.agent_reports.items():
+            syn = report.get('synthesis', {})
+            score = syn.get('综合评分')
+            if syn.get('最终建议') == '买入' or (isinstance(score, (int, float)) and score >= buy_threshold):
+                buy_codes.append(code)
+        baselines['agent_buy']['slices'].append(
+            _extract_returns(buy_codes, sl, forward_periods)
+        )
+
+        # agent_top5
+        scored = []
+        for code, report in sl.agent_reports.items():
+            syn = report.get('synthesis', {})
+            score = syn.get('综合评分')
+            if isinstance(score, (int, float)):
+                scored.append((code, score))
+        scored.sort(key=lambda x: -x[1])
+        baselines['agent_top']['slices'].append(
+            _extract_returns([c for c, _ in scored[:5]], sl, forward_periods)
+        )
+
+    # 汇总统计
+    for bl in baselines.values():
+        bl['stats'] = _aggregate_returns(bl['slices'], forward_periods)
+
+    return baselines
+
+
+def _extract_returns(codes: List[str], sl: EvalSlice, forward_periods: List[dict]) -> dict:
+    """提取一组股票在某截面的前向收益"""
+    data = {'cutoff_date': sl.cutoff_date, 'count': len(codes), 'codes': codes}
+    for fp in forward_periods:
+        months = fp['months']
+        rets = []
+        for code in codes:
+            outcome = sl.outcomes.get(code)
+            if outcome:
+                ret = getattr(outcome, f'return_{months}m', None)
+                if ret is not None:
+                    rets.append(ret)
+        data[f'returns_{months}m'] = rets
+    return data
+
+
+def _aggregate_returns(slices: List[dict], forward_periods: List[dict]) -> dict:
+    """汇总多截面收益统计"""
+    stats = {}
+    for fp in forward_periods:
+        months = fp['months']
+        label = fp['label']
+        all_rets = []
+        for s in slices:
+            all_rets.extend(s.get(f'returns_{months}m', []))
+        if all_rets:
+            sorted_r = sorted(all_rets)
+            stats[label] = {
+                'count': len(all_rets),
+                'mean': sum(all_rets) / len(all_rets),
+                'median': sorted_r[len(sorted_r) // 2],
+                'win_rate': sum(1 for r in all_rets if r > 0) / len(all_rets),
+                'best': max(all_rets),
+                'worst': min(all_rets),
+            }
+        else:
+            stats[label] = {'count': 0}
+    stats['total_stocks'] = sum(s['count'] for s in slices)
+    stats['total_slices'] = len(slices)
+    return stats
+
+
+# ==================== 报告格式化 ====================
+
+def _format_eval_report(
+    slices: List[EvalSlice],
+    performance: Dict[str, dict],
+    config: "StrategyConfig",
+) -> str:
+    """生成 Markdown 绩效报告"""
+    forward_periods = config.get_forward_periods()
+    dates = [sl.cutoff_date for sl in slices]
+
+    lines = [
+        f"# 回测绩效报告: {config.name}",
+        "",
+        f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+        f"**截面**: {len(dates)} 个 ({dates[0]} ~ {dates[-1]})",
+        f"**间隔**: {config.get_cross_section_interval()}",
+        "",
+        "## 各截面概览",
+        "",
+        "| 截面 | 筛选候选 | Agent报告 | Agent买入 |",
+        "|------|---------|----------|----------|",
+    ]
+    for sl in slices:
+        n_cand = len(sl.candidates)
+        n_reports = len(sl.agent_reports)
+        n_buy = sum(
+            1 for r in sl.agent_reports.values()
+            if r.get('synthesis', {}).get('最终建议') == '买入'
+        )
+        lines.append(f"| {sl.cutoff_date} | {n_cand} | {n_reports} | {n_buy} |")
+
+    # 多基准对比
+    lines.extend(["", "## 多基准绩效对比", ""])
+    for fp in forward_periods:
+        label = fp['label']
+        lines.extend([f"### {label}前向收益", ""])
+        lines.append("| 基准 | 样本数 | 平均收益 | 中位数 | 胜率 | 最好 | 最差 |")
+        lines.append("|------|--------|---------|--------|------|------|------|")
+        for key in ['screen_all', 'screen_top', 'agent_buy', 'agent_top']:
+            bl = performance.get(key, {})
+            stats = bl.get('stats', {}).get(label, {})
+            bl_label = bl.get('label', key)
+            count = stats.get('count', 0)
+            if count > 0:
+                lines.append(
+                    f"| {bl_label} | {count} "
+                    f"| {stats['mean']*100:+.1f}% "
+                    f"| {stats['median']*100:+.1f}% "
+                    f"| {stats['win_rate']*100:.0f}% "
+                    f"| {stats['best']*100:+.1f}% "
+                    f"| {stats['worst']*100:+.1f}% |"
+                )
+            else:
+                lines.append(f"| {bl_label} | 0 | N/A | N/A | N/A | N/A | N/A |")
+        lines.append("")
+
+    # Agent 汇总
+    lines.extend(["## Agent 分析结果汇总", ""])
+    lines.append("| 截面 | 股票 | 评分 | 建议 | 流派 | 6m实际 |")
+    lines.append("|------|------|------|------|------|--------|")
+    for sl in slices:
+        for code, report in sorted(sl.agent_reports.items()):
+            syn = report.get('synthesis', {})
+            outcome = sl.outcomes.get(code)
+            ret_6m = f"{outcome.return_6m*100:+.1f}%" if outcome and outcome.return_6m is not None else "N/A"
+            lines.append(
+                f"| {sl.cutoff_date} | {code} "
+                f"| {syn.get('综合评分', '')} | {syn.get('最终建议', '')} "
+                f"| {syn.get('流派判定', '')} | {ret_6m} |"
+            )
+
+    # Alpha
+    lines.extend(["", "## Alpha 分析", ""])
+    for fp in forward_periods:
+        label = fp['label']
+        s_all = performance.get('screen_all', {}).get('stats', {}).get(label, {})
+        s_buy = performance.get('agent_buy', {}).get('stats', {}).get(label, {})
+        if s_all.get('mean') is not None and s_buy.get('mean') is not None:
+            alpha = s_buy['mean'] - s_all['mean']
+            lines.append(
+                f"- **{label}**: Agent买入 vs 筛选池 alpha = "
+                f"{alpha*100:+.1f}pp "
+                f"({s_buy['mean']*100:+.1f}% vs {s_all['mean']*100:+.1f}%)"
+            )
+        else:
+            lines.append(f"- **{label}**: 数据不足")
+
+    return '\n'.join(lines)
+
+
+def _save_eval_json(
+    slices: List[EvalSlice],
+    performance: Dict[str, dict],
+    config: "StrategyConfig",
+    path: Path,
+):
+    """保存结构化回测结果"""
+    summary = {
+        'strategy': config.name,
+        'version': config.version,
+        'dates': [sl.cutoff_date for sl in slices],
+        'interval': config.get_cross_section_interval(),
+        'generated_at': datetime.now().isoformat(),
+        'slices': [],
+        'performance': {},
+    }
+    for sl in slices:
+        sd = {
+            'cutoff_date': sl.cutoff_date,
+            'screen_count': len(sl.candidates),
+            'agent_count': len(sl.agent_reports),
+            'agent_scores': {},
+        }
+        for code, report in sl.agent_reports.items():
+            syn = report.get('synthesis', {})
+            sd['agent_scores'][code] = {
+                'score': syn.get('综合评分'),
+                'recommendation': syn.get('最终建议'),
+                'stream': syn.get('流派判定'),
+            }
+        summary['slices'].append(sd)
+
+    for key, bl in performance.items():
+        summary['performance'][key] = {
+            'label': bl.get('label', ''),
+            'desc': bl.get('desc', ''),
+            'stats': bl.get('stats', {}),
+        }
+
+    path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, default=str),
+        encoding='utf-8',
+    )

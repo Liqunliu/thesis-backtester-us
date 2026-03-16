@@ -26,8 +26,12 @@ src/data/          # Data layer: Provider abstraction + Parquet storage + snapsh
   snapshot.py      #   Time-point snapshot generation
 src/agent/         # Agent: LLM-driven blind analysis (OpenAI-compatible tool_use)
 src/screener/      # Screener: quantitative filtering (reads pre-computed factors)
-src/backtest/      # Backtest: batch backtest + cross-section + outcome + scoring
-src/web/           # Web: Streamlit strategy tuning dashboard
+src/backtest/      # Backtest: pipeline + outcome + scoring + multi-baseline perf
+  pipeline.py      #   Full pipeline: dates → screen → agent → outcomes → eval
+  batch_backtest.py#   Legacy batch screening backtest
+  outcome_collector.py # Forward return collection
+  quality_scorer.py#   5-dimension analysis quality scoring
+src/web/           # Web: Streamlit strategy workbench
 
 factors/           # Quantitative factor definitions (.py files, 截面+时序)
 operators/         # Qualitative analysis operators (.md files, with YAML frontmatter)
@@ -64,6 +68,17 @@ python -m src.engine.launcher strategies/v6_value/strategy.yaml agent-analyze 60
 
 # Batch: screen + auto agent analysis on top candidates
 python -m src.engine.launcher strategies/v6_value/strategy.yaml batch-analyze 2024-06-30
+
+# Backtest pipeline (3 independent steps)
+# Step 1: Generate dates + screen at each date + save CSVs
+python -m src.engine.launcher strategies/v6_value/strategy.yaml backtest-screen
+
+# Step 2: Concurrent agent analysis (incremental, with retry + progress)
+python -m src.engine.launcher strategies/v6_value/strategy.yaml backtest-agent
+python -m src.engine.launcher strategies/v6_value/strategy.yaml backtest-agent --retry 2
+
+# Step 3: Collect forward returns + multi-baseline performance evaluation
+python -m src.engine.launcher strategies/v6_value/strategy.yaml backtest-eval
 ```
 
 ### Direct module invocation

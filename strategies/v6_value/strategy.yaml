@@ -144,7 +144,11 @@ framework:
   - '信心水平: 高 / 中 / 低'
 
 backtest:
+  start_date: '2022-06-30'
+  end_date: '2024-06-30'
   cross_section_interval: 6m
+  top_n: 50
+  agent_concurrency: 3
   forward_periods:
   - {months: 1, label: 1个月}
   - {months: 3, label: 3个月}

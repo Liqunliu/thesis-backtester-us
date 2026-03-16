@@ -1,13 +1,14 @@
 """
-策略调试台 — Streamlit Web App
+策略工作台 — Streamlit Web App
 
-用 st.data_editor 做表格化配置编辑，3 个主 tab:
-  策略配置 | 筛选预览 | 粗略回测
+5 个主 tab 覆盖完整工作流:
+  策略配置 | 算子库 | 筛选预览 | 分析报告 | 粗略回测
 
 启动:
     streamlit run src/web/app.py
 """
 import copy
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -40,7 +41,7 @@ CROSS_SECTION_OPTIONS = ["1w", "2w", "1m", "2m", "3m", "6m", "1y"]
 
 # ==================== 页面 ====================
 
-st.set_page_config(page_title="策略调试台", page_icon="📊", layout="wide")
+st.set_page_config(page_title="策略工作台", page_icon="📊", layout="wide")
 
 
 # ==================== 工具函数 ====================
@@ -199,6 +200,46 @@ def chapters_to_df(chapters: list) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def load_agent_reports(config: StrategyConfig) -> list:
+    """扫描 agent_reports/ 目录，加载所有 structured.json"""
+    reports_dir = config.get_backtest_dir() / "agent_reports"
+    if not reports_dir.exists():
+        return []
+    results = []
+    for f in sorted(reports_dir.glob("*_structured.json"), reverse=True):
+        try:
+            data = json.loads(f.read_text(encoding='utf-8'))
+            meta = data.get("metadata", {})
+            syn = data.get("synthesis", {})
+            results.append({
+                "ts_code": meta.get("ts_code", ""),
+                "cutoff_date": meta.get("cutoff_date", ""),
+                "score": syn.get("综合评分", ""),
+                "recommendation": syn.get("最终建议", ""),
+                "stream": syn.get("流派判定", ""),
+                "turtle_rating": syn.get("龟级评定", ""),
+                "buy_logic": syn.get("一句话买入逻辑", ""),
+                "confidence": syn.get("信心水平", ""),
+                "risks": syn.get("关键风险", []),
+                "model": meta.get("model", ""),
+                "elapsed": meta.get("elapsed_seconds", 0),
+                "chapters": meta.get("chapters_completed", 0),
+                "file": str(f),
+                "report_file": str(f).replace("_structured.json", "_report.md"),
+                "_synthesis": syn,
+                "_chapters": data.get("chapter_outputs", {}),
+            })
+        except Exception:
+            continue
+    return results
+
+
+def get_report_index(config: StrategyConfig) -> dict:
+    """返回 {(ts_code, cutoff_date): report_summary} 用于筛选结果关联"""
+    reports = load_agent_reports(config)
+    return {(r["ts_code"], r["cutoff_date"]): r for r in reports}
+
+
 def df_to_chapters(df: pd.DataFrame) -> list:
     result = []
     for _, row in df.iterrows():
@@ -273,8 +314,8 @@ if config is None:
 
 # ==================== 3 个 Tab ====================
 
-tab_config, tab_operators, tab_screen, tab_backtest = st.tabs([
-    "⚙️ 策略配置", "🧩 算子库", "🔍 筛选预览", "📈 粗略回测"])
+tab_config, tab_operators, tab_screen, tab_reports, tab_backtest = st.tabs([
+    "⚙️ 策略配置", "🧩 算子库", "🔍 筛选预览", "📋 分析报告", "📈 粗略回测"])
 
 
 # ==================== Tab 1: 策略配置 ====================
@@ -542,9 +583,21 @@ with tab_screen:
                     f"(ratio={config.get_agent_batch_config().get('ratio')}, "
                     f"max={config.get_agent_batch_config().get('max')})")
 
+            # 关联已有 Agent 报告
+            report_idx = get_report_index(config)
+            cutoff_str_for_match = cutoff_str
+            candidates = result.candidates.copy()
+            candidates['agent_score'] = candidates['ts_code'].apply(
+                lambda c: report_idx.get((c, cutoff_str_for_match), {}).get('score', ''))
+            candidates['agent_rec'] = candidates['ts_code'].apply(
+                lambda c: report_idx.get((c, cutoff_str_for_match), {}).get('recommendation', ''))
+            analyzed_count = (candidates['agent_score'] != '').sum()
+            if analyzed_count > 0:
+                st.success(f"已有 {analyzed_count}/{len(candidates)} 只股票的 Agent 分析报告")
+
             # 候选表
-            display = [c for c in result.candidates.columns if c not in ('trade_date', 'total_mv')]
-            st.dataframe(result.candidates[display], use_container_width=True, hide_index=True)
+            display = [c for c in candidates.columns if c not in ('trade_date', 'total_mv')]
+            st.dataframe(candidates[display], use_container_width=True, hide_index=True)
 
             # 分布图
             factors = config.get_scoring_factors()
@@ -559,7 +612,111 @@ with tab_screen:
             st.warning("无候选，请调整过滤条件")
 
 
-# ==================== Tab 3: 粗略回测 ====================
+# ==================== Tab 4: 分析报告 ====================
+
+with tab_reports:
+    reports = load_agent_reports(config)
+
+    if not reports:
+        st.info("暂无 Agent 分析报告。运行 `batch-analyze` 或 `agent-analyze` 命令生成。")
+        st.code(
+            f"python -m src.engine.launcher {config.yaml_path.relative_to(PROJECT_ROOT)} "
+            f"batch-analyze 2024-06-30",
+            language="bash",
+        )
+    else:
+        st.subheader(f"分析报告 ({len(reports)} 份)")
+
+        # ---- 汇总表 ----
+        summary_rows = []
+        for r in reports:
+            summary_rows.append({
+                '股票': r['ts_code'],
+                '截面': r['cutoff_date'],
+                '评分': r['score'],
+                '建议': r['recommendation'],
+                '流派': r['stream'],
+                '龟级': r['turtle_rating'],
+                '信心': r['confidence'],
+                '模型': r['model'],
+                '耗时(s)': r['elapsed'],
+            })
+        summary_df = pd.DataFrame(summary_rows)
+
+        # 评分分布
+        scores = [r['score'] for r in reports if isinstance(r['score'], (int, float))]
+        if scores:
+            mc1, mc2, mc3, mc4 = st.columns(4)
+            mc1.metric("平均评分", f"{sum(scores) / len(scores):.0f}")
+            mc2.metric("最高", max(scores))
+            mc3.metric("最低", min(scores))
+            recs = [r['recommendation'] for r in reports]
+            buy_count = sum(1 for r in recs if r == '买入')
+            mc4.metric("买入建议", f"{buy_count}/{len(reports)}")
+
+        # 建议分布
+        rec_dist = summary_df['建议'].value_counts()
+        if not rec_dist.empty:
+            cols = st.columns(max(len(rec_dist), 1))
+            for i, (rec, count) in enumerate(rec_dist.items()):
+                cols[i % len(cols)].metric(rec, count)
+
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+        st.divider()
+
+        # ---- 单份报告详情 ----
+        report_labels = [f"{r['ts_code']} @ {r['cutoff_date']} (评分:{r['score']})" for r in reports]
+        selected_idx = st.selectbox("查看报告详情", range(len(reports)),
+                                     format_func=lambda i: report_labels[i])
+
+        if selected_idx is not None:
+            rpt = reports[selected_idx]
+            st.subheader(f"{rpt['ts_code']} — {rpt['cutoff_date']}")
+
+            # 核心指标卡片
+            kc1, kc2, kc3, kc4 = st.columns(4)
+            kc1.metric("综合评分", rpt['score'])
+            kc2.metric("最终建议", rpt['recommendation'])
+            kc3.metric("流派", rpt['stream'])
+            kc4.metric("龟级", rpt['turtle_rating'])
+
+            # 买入逻辑
+            if rpt['buy_logic']:
+                st.info(f"**买入逻辑**: {rpt['buy_logic']}")
+
+            # 关键风险
+            if rpt['risks']:
+                with st.expander("关键风险", expanded=True):
+                    for risk in rpt['risks']:
+                        st.markdown(f"- {risk}")
+
+            # 各章结论
+            ch_outputs = rpt.get('_chapters', {})
+            if ch_outputs:
+                with st.expander("各章结构化结论"):
+                    for ch_id, ch_data in ch_outputs.items():
+                        st.markdown(f"**{ch_id}**")
+                        if isinstance(ch_data, dict):
+                            for k, v in ch_data.items():
+                                st.markdown(f"- `{k}`: {v}")
+                        st.markdown("---")
+
+            # 完整综合研判
+            syn = rpt.get('_synthesis', {})
+            if syn:
+                with st.expander("综合研判 JSON"):
+                    st.json(syn)
+
+            # 完整 Markdown 报告
+            report_path = Path(rpt['report_file'])
+            if report_path.exists():
+                with st.expander("完整分析报告 (Markdown)"):
+                    md_text = report_path.read_text(encoding='utf-8')
+                    st.markdown(md_text)
+
+
+# ==================== Tab 5: 粗略回测 ====================
 
 with tab_backtest:
     st.caption("在多个历史截面运行筛选，观察候选池稳定性")
