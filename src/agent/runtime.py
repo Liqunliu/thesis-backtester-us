@@ -187,19 +187,28 @@ def build_synthesis_prompt(
     snapshot: StockSnapshot,
     chapter_outputs: Dict[str, Any],
     blind_mode: bool = True,
+    chapter_texts: Optional[Dict[str, str]] = None,
 ) -> str:
-    """构建综合研判的 system prompt"""
+    """构建综合研判的 system prompt（含结构化思考步骤和评分锚点）"""
     analyst_role = config.get_analyst_role()
     version_string = config.get_version_string()
     synthesis_fields = config.get_synthesis_fields()
+    thinking_steps = config.get_thinking_steps()
+    scoring_rubric = config.get_scoring_rubric()
+    decision_thresholds = config.get_decision_thresholds()
 
-    # 格式化前置章节输出
+    # 格式化前置章节输出（完整分析文本 + 结构化结论）
     prior_text = ""
     chapter_defs = config.get_chapter_defs()
     for ch_def in chapter_defs:
         ch_id = ch_def["id"]
-        if ch_id in chapter_outputs:
-            prior_text += f"\n### 第{ch_def['chapter']}章: {ch_def['title']}\n"
+        prior_text += f"\n### 第{ch_def['chapter']}章: {ch_def['title']}\n"
+
+        # 优先使用完整分析文本（含推理过程和数据引用）
+        if chapter_texts and ch_id in chapter_texts:
+            prior_text += f"\n{chapter_texts[ch_id]}\n"
+        elif ch_id in chapter_outputs:
+            # 回退：仅有结构化输出
             output = chapter_outputs[ch_id]
             if isinstance(output, dict):
                 for k, v in output.items():
@@ -214,24 +223,53 @@ def build_synthesis_prompt(
     if blind_mode:
         blind_rules = "\n注意：这是盲测分析，你不知道公司身份。\n"
 
+    # 构建思考步骤
+    thinking_text = ""
+    if thinking_steps:
+        thinking_text = "\n## 思考步骤\n\n请严格按以下步骤进行综合研判：\n"
+        for i, step in enumerate(thinking_steps, 1):
+            thinking_text += f"\n### 步骤 {i}: {step['step']}\n\n{step['instruction']}\n"
+
+    # 构建评分锚点
+    rubric_text = ""
+    if scoring_rubric:
+        rubric_text = "\n## 评分锚点（校准参考，不是公式）\n\n"
+        for item in scoring_rubric:
+            rubric_text += f"- **{item['range']}分**: {item['description']}\n"
+
+    # 构建决策边界
+    threshold_text = ""
+    if decision_thresholds:
+        buy = decision_thresholds.get('buy', 70)
+        avoid = decision_thresholds.get('avoid', 29)
+        threshold_text = f"""
+## 决策边界
+
+- ≥{buy}分 → 买入
+- {avoid + 1}-{buy - 1}分 → 观望
+- ≤{avoid}分 → 回避
+
+评分与最终建议必须一致，不能出现"评分 75 但建议观望"的矛盾。
+"""
+
     return f"""你是一位{analyst_role}，已完成「{version_string}」框架的全部章节分析。
-现在请基于所有章节的结论，输出综合研判报告。
+现在请基于所有章节的结论，进行综合研判。
 
 ## 严格时间边界: {snapshot.cutoff_date}
 {blind_rules}
 ## 各章分析结论
 {prior_text}
+{thinking_text}{rubric_text}{threshold_text}
+## 输出要求
 
-## 综合研判输出要求
-
-请输出包含以下字段的综合研判（用 ```json 包裹）：
+完成上述思考步骤后，输出包含以下字段的综合研判（用 ```json 包裹）：
 
 {fields_text}
 
 注意：
-- 综合评分 0-100 分，基于所有章节的分析结论
 - 一句话买入逻辑必须是可证伪的投资命题
-- 最终建议只能是：买入 / 观望 / 回避"""
+- 最终建议只能是：买入 / 观望 / 回避
+- 先完成思考步骤的分析，再给出最终 JSON"""
 
 
 # ==================== Agent Loop ====================
@@ -483,9 +521,12 @@ async def run_blind_analysis(
             chapter_outputs[ch_id] = structured or {}
             logger.info(f"  Completed: {ch_id} ({'structured' if structured else 'text only'})")
 
-    # 5. 综合研判
+    # 5. 综合研判（传入完整分析文本，让 synthesis 看到推理过程和数据引用）
     logger.info("Running synthesis...")
-    synthesis_prompt = build_synthesis_prompt(config, snapshot, chapter_outputs, blind_mode)
+    synthesis_prompt = build_synthesis_prompt(
+        config, snapshot, chapter_outputs, blind_mode,
+        chapter_texts=chapter_texts,
+    )
     synthesis_text, synthesis_output = await run_agent_loop(
         client, synthesis_prompt, sandbox
     )

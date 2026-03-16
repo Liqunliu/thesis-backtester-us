@@ -194,6 +194,22 @@ def _compute_tiers(df: pd.DataFrame, tiers: List[dict], default_label: str) -> p
 
 # ==================== 主入口 ====================
 
+def _apply_industry_cap(df: pd.DataFrame, industry_map: dict, cap: int) -> pd.DataFrame:
+    """
+    行业上限：每行业最多保留 cap 只，按 tier_score 降序取 top。
+    industry_map: {ts_code: industry_name}
+    """
+    df = df.copy()
+    df['_industry'] = df['ts_code'].map(industry_map).fillna('未知')
+    # 按 tier_score 降序，每行业取 top cap
+    df = df.sort_values('tier_score', ascending=False)
+    df = df.groupby('_industry', sort=False).head(cap)
+    # 恢复原排序
+    df = df.sort_values('tier_score', ascending=False)
+    df = df.drop(columns=['_industry'])
+    return df
+
+
 def screen_at_date(
     cutoff_date: str,
     config: StrategyConfig,
@@ -212,6 +228,7 @@ def screen_at_date(
     tiers = config.get_tiers()
     default_label = config.get_default_tier_label()
     exclude_rules = config.get_exclude_rules()
+    industry_cap = config.get_industry_cap()
 
     result = ScreenResult(cutoff_date=cutoff_date)
 
@@ -292,18 +309,28 @@ def screen_at_date(
 
     df = df.sort_values(sort_cols, ascending=sort_asc)
 
+    # 6.5 行业上限 — 避免单行业扎堆
+    if industry_cap and industry_cap > 0 and not stock_list.empty:
+        industry_map = stock_list.set_index('ts_code')['industry'].to_dict()
+        before_cap = len(df)
+        df = _apply_industry_cap(df, industry_map, industry_cap)
+        if len(df) < before_cap:
+            print(f"  行业上限({industry_cap}只/行业): {before_cap} → {len(df)}")
+
     # 7. 取 top_n
     candidates = df.head(top_n).copy()
 
-    # 8. 补充股票名称
+    # 8. 补充股票名称和行业
     if not stock_list.empty:
-        name_map = stock_list.set_index('ts_code')['name'].to_dict()
-        candidates['stock_name'] = candidates['ts_code'].map(name_map)
+        sl_index = stock_list.set_index('ts_code')
+        candidates['stock_name'] = candidates['ts_code'].map(sl_index['name'].to_dict())
+        candidates['industry'] = candidates['ts_code'].map(sl_index['industry'].to_dict())
     else:
         candidates['stock_name'] = ''
+        candidates['industry'] = ''
 
     # 9. 整理输出列
-    base_cols = ['ts_code', 'stock_name', 'trade_date']
+    base_cols = ['ts_code', 'stock_name', 'industry', 'trade_date']
     factor_fields = [f['field'] for f in factors if f['field'] in candidates.columns]
     filter_fields = [f['field'] for f in filters if f['field'] in candidates.columns and f['field'] not in factor_fields]
     score_cols = ['tier_score', 'tier_rating']

@@ -527,6 +527,21 @@ with tab_screen:
                 for i, (rating, count) in enumerate(dist.items()):
                     cols[i].metric(rating, count)
 
+            # 行业分布
+            if 'industry' in result.candidates.columns:
+                ind_dist = result.candidates['industry'].value_counts()
+                st.caption(f"行业分布 ({len(ind_dist)} 个行业)")
+                st.bar_chart(ind_dist)
+                cap = config.get_industry_cap()
+                if cap:
+                    st.caption(f"行业上限: {cap} 只/行业")
+
+            # Agent 批量分析计划
+            agent_n = config.get_agent_batch_size(len(result.candidates))
+            st.info(f"Agent 分析: 取 Top {agent_n} 只 "
+                    f"(ratio={config.get_agent_batch_config().get('ratio')}, "
+                    f"max={config.get_agent_batch_config().get('max')})")
+
             # 候选表
             display = [c for c in result.candidates.columns if c not in ('trade_date', 'total_mv')]
             st.dataframe(result.candidates[display], use_container_width=True, hide_index=True)

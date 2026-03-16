@@ -135,6 +135,23 @@ class StrategyConfig:
         framework = self.raw.get('framework', {})
         return framework.get('synthesis_fields', [])
 
+    def get_synthesis_config(self) -> dict:
+        """获取综合研判配置（thinking_steps, scoring_rubric, decision_thresholds）"""
+        framework = self.raw.get('framework', {})
+        return framework.get('synthesis', {})
+
+    def get_thinking_steps(self) -> List[dict]:
+        """获取综合研判的思考步骤"""
+        return self.get_synthesis_config().get('thinking_steps', [])
+
+    def get_scoring_rubric(self) -> List[dict]:
+        """获取评分锚点"""
+        return self.get_synthesis_config().get('scoring_rubric', [])
+
+    def get_decision_thresholds(self) -> dict:
+        """获取决策边界阈值"""
+        return self.get_synthesis_config().get('decision_thresholds', {})
+
     # ==================== 声明式筛选 ====================
 
     def get_screening_config(self) -> dict:
@@ -143,6 +160,22 @@ class StrategyConfig:
     def get_exclude_rules(self) -> List[dict]:
         """获取排除规则"""
         return self.get_screening_config().get('exclude', [])
+
+    def get_industry_cap(self) -> int:
+        """获取单行业入选上限，0 表示不限"""
+        return self.get_screening_config().get('industry_cap', 0)
+
+    def get_agent_batch_config(self) -> dict:
+        """获取 agent 批量分析配置 {ratio, max}"""
+        return self.get_screening_config().get('agent_batch', {'ratio': 0.2, 'max': 20})
+
+    def get_agent_batch_size(self, total_candidates: int) -> int:
+        """根据候选总数计算 agent 分析数量"""
+        cfg = self.get_agent_batch_config()
+        ratio = cfg.get('ratio', 0.2)
+        max_n = cfg.get('max', 20)
+        n = max(1, int(total_candidates * ratio))
+        return min(n, max_n)
 
     def get_filters(self) -> List[dict]:
         """获取声明式过滤条件"""

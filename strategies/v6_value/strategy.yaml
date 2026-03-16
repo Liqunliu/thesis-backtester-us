@@ -6,6 +6,10 @@ screening:
   exclude:
   - field: name
     contains: [ST, 退]
+  industry_cap: 3          # 单行业最多入选N只，按 tier_score 排序取 top
+  agent_batch:
+    ratio: 0.2             # agent 分析取筛选结果的前 ratio 比例
+    max: 20                # agent 分析最大股票数
   filters:
   - field: pe_ttm
     min: 0.01
@@ -84,6 +88,49 @@ framework:
     title: 投资决策与持仓管理
     operators: [apple_trading_model, valuation_repair, position_management]
     dependencies: [ch04_valuation, ch05_stress]
+  synthesis:
+    thinking_steps:
+      - step: 一票否决
+        instruction: |
+          检查是否触发以下任一条件（触发则直接回避，评分 ≤ 25）：
+          - 数据不可信（Ch01 未通过初筛，数据源评级为 D/E）
+          - 管理层诚信评估为"不可信"（财务造假嫌疑、频繁违规）
+          - 有息负债结构为"危险"且经营现金流无法覆盖利息
+          - 审计意见非标准无保留（保留意见、否定意见、无法表示意见）
+          如果触发否决，简要说明原因后直接给出回避建议，无需后续步骤。
+      - step: 识别投资机会类型
+        instruction: |
+          基于 Ch02 流派判定，确认这属于哪种投资机会，并明确后续评估侧重：
+          - 纯硬收息：核心看股息可持续性（派息率 < 70%、现金流覆盖）、分红历史稳定性
+          - 价值发现：核心看安全边际（当前价 vs 内在价值）、估值修复催化剂是否存在
+          - 烟蒂股：核心看清算价值（净流动资产 vs 市值）、资产变现可能性
+          - 关联方资源：核心看政策依赖度、资源获取的可持续性
+          不同流派的评分侧重不同——不要用纯硬收息的标准去评价值发现型标的。
+      - step: 核心矛盾
+        instruction: |
+          回答两个关键问题（各用 1-2 句话）：
+          1. 最可能让我亏钱的原因是什么？（综合 Ch05 压力测试 + Ch02 风险因素）
+          2. 如果买入，我赚的是什么钱？（估值修复 / 股息收入 / 业绩拐点）
+          如果问题 1 的答案比问题 2 更有说服力，应倾向回避或低分观望。
+      - step: 评分与决策
+        instruction: |
+          基于以上三步分析，参照评分锚点给出综合评分，并确保评分与最终建议一致。
+          评分时特别注意：不要被单一亮点拉高分数，也不要被单一瑕疵拉低——综合权衡。
+    scoring_rubric:
+      - range: "85-100"
+        description: "极度低估 + 现金流强劲 + 管理层可信 + 无重大风险 + 明确催化剂"
+      - range: "70-84"
+        description: "明确低估 + 基本面健康 + 风险可控 → 买入区间"
+      - range: "50-69"
+        description: "有一定吸引力但存在明确疑虑（周期位置不确定、管理层存疑、行业逆风）→ 观望"
+      - range: "30-49"
+        description: "风险收益不对称，下行风险大于上行空间 → 偏向回避"
+      - range: "0-29"
+        description: "重大风险、价值陷阱、数据不可信、或一票否决 → 明确回避"
+    decision_thresholds:
+      buy: 70
+      watch: [30, 69]
+      avoid: 29
   synthesis_fields:
   - '流派判定: 纯硬收息 / 价值发现 / 烟蒂股 / 关联方资源'
   - '龟级评定: 金龟 / 银龟 / 铜龟 / 不达标'

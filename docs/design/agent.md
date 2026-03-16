@@ -142,19 +142,69 @@ async def run_agent_loop(client, system_prompt, sandbox, prior_context):
 
 ### 6. 综合分析 (Synthesis)
 
-所有章节完成后，执行一次综合分析。综合 prompt 使用 `strategy.yaml` 中的 `synthesis_fields` 定义输出字段。
+所有章节完成后，执行一次综合分析。综合 prompt 由三部分配置驱动：
+
+**设计哲学**：算子管"看什么"，synthesis 管"怎么想"，评分留给 LLM 判断力。不用显式评分公式（那会退化为量化模型），而是通过结构化思考步骤引导 LLM 的推理路径。详见 [评分哲学](scoring.md)。
+
+#### 思考步骤（thinking_steps）
+
+引导 LLM 按固定认知路径推理，而不是直接"给 0-100 分"：
 
 ```yaml
-# strategy.yaml
 framework:
-  synthesis_fields:
-  - '流派判定: 纯硬收息 / 价值发现 / 烟蒂股 / 关联方资源'
-  - '龟级评定: 金龟 / 银龟 / 铜龟 / 不达标'
-  - '一句话买入逻辑（强制）: 可证伪的投资命题'
-  - '最终建议: 买入 / 观望 / 回避'
-  - '综合评分: 0-100分'
-  # ...
+  synthesis:
+    thinking_steps:
+      - step: 一票否决
+        instruction: 检查致命问题 → 触发则直接回避，评分 ≤ 25
+      - step: 识别投资机会类型
+        instruction: 基于流派判定确认评估侧重
+      - step: 核心矛盾
+        instruction: 最可能亏钱的原因 vs 赚的是什么钱
+      - step: 评分与决策
+        instruction: 参照评分锚点，综合权衡
 ```
+
+#### 评分锚点（scoring_rubric）
+
+校准参考——告诉 LLM "90 分长什么样"，让不同标的的分数可比较：
+
+```yaml
+    scoring_rubric:
+      - range: "85-100"
+        description: "极度低估 + 现金流强劲 + 无重大风险 + 明确催化剂"
+      - range: "70-84"
+        description: "明确低估 + 基本面健康 → 买入区间"
+      - range: "50-69"
+        description: "有吸引力但存在疑虑 → 观望"
+      - range: "30-49"
+        description: "风险收益不对称 → 偏向回避"
+      - range: "0-29"
+        description: "重大风险 / 价值陷阱 → 明确回避"
+```
+
+#### 决策边界 + 输出字段
+
+```yaml
+    decision_thresholds: { buy: 70, watch: [30, 69], avoid: 29 }
+  synthesis_fields:
+    - '流派判定 / 龟级评定 / 核心估值 / 苹果买卖模型'
+    - '一句话买入逻辑（可证伪）/ 关键风险 / 管理人诚信'
+    - '最终建议: 买入/观望/回避 / 综合评分: 0-100 / 信心水平'
+```
+
+#### Synthesis Prompt 结构
+
+```
+build_synthesis_prompt() 组装:
+  ├── 角色定义 + 时间边界 + 盲测规则
+  ├── 各章完整分析文本（含推理过程和数据引用，回退到 JSON 字段）
+  ├── 思考步骤（4步结构化推理）
+  ├── 评分锚点（5级校准参考）
+  ├── 决策边界（评分与建议一致性约束）
+  └── 输出字段要求（synthesis_fields）
+```
+
+**完整文本 vs JSON 字段**：synthesis 默认接收每章的完整分析文本（包括 LLM 的推理过程、数据引用、具体论据），而不仅是提取出的 JSON 结论字段。这确保最终综合研判基于完整论据而非标签摘要。若 `chapter_texts` 不可用，则回退到 `chapter_outputs` 的 JSON 字段。
 
 ## 工具沙盒 (ToolSandbox)
 

@@ -96,7 +96,10 @@ python -m src.engine.launcher data update-daily
 python -m src.engine.launcher data update-indicator
 python -m src.engine.launcher data update-factors
 
-# Batch update financial statements
+# Financial statements — bulk (cross-section by period, fast)
+python -m src.engine.launcher data update-financials
+
+# Financial statements — specific stocks (per-stock, all 15 tables incl. dividend/holders)
 python -m src.engine.launcher data update-financials 601288.SH 000001.SZ
 
 # Full recalculation of all cross-section factors
@@ -149,7 +152,9 @@ Output schema is auto-generated from operator `outputs` definitions. No `output_
 
 ## Design Principles
 
-- **Operator-driven**: Analysis logic lives in operators (.md files with YAML frontmatter). Strategies compose operators via chapters.yaml
+- **Operator-driven**: Analysis logic lives in operators (.md files with YAML frontmatter). Strategies compose operators via YAML chapters config
+- **Three-layer scoring**: Operators solve "what to look at", chapters encode analysis ordering, synthesis prompt solves "how to think". Final scoring stays with LLM judgment — no explicit scoring formulas (see docs/design/scoring.md)
+- **Structured synthesis**: synthesis config in strategy.yaml includes thinking_steps (cognitive path), scoring_rubric (calibration anchors), decision_thresholds (score-to-recommendation mapping)
 - **Config-driven**: All strategy-specific values live in strategy.yaml, never hardcoded in engine
 - **StrategyConfig required**: Engine functions require StrategyConfig — no fallback defaults
 - **Time boundary**: All analysis strictly respects cutoff date. Data layer enforces hard filtering by announcement date (ann_date)
