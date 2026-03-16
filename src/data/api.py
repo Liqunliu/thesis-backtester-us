@@ -248,10 +248,12 @@ def get_financial_indicator(
 
 
 def get_disclosure_dates(ts_code: str) -> pd.DataFrame:
-    """获取财报披露日期"""
-    df = storage.load_financial('disclosure_date', partitions=[ts_code])
+    """获取财报披露日期（disclosure_date 按报告期分区，需加载全部后按股票过滤）"""
+    df = storage.load_financial('disclosure_date')
     if df.empty:
         return df
+    if 'ts_code' in df.columns:
+        df = df[df['ts_code'] == ts_code]
     return df.sort_values('end_date').reset_index(drop=True)
 
 
@@ -402,6 +404,27 @@ def get_ts_factors(
 def get_latest_date(category: str = 'daily', sub: str = 'raw') -> Optional[str]:
     """获取本地数据最新日期"""
     return storage.get_latest_date(category, sub)
+
+
+def get_index_daily(
+    ts_code: str,
+    start_date: str,
+    end_date: str,
+) -> pd.DataFrame:
+    """
+    获取指数日线行情 (直接调用 tushare API，不走本地存储)
+
+    Args:
+        ts_code: 指数代码，如 '000300.SH' (沪深300), '000905.SH' (中证500)
+        start_date: 起始日期 YYYY-MM-DD
+        end_date: 结束日期 YYYY-MM-DD
+
+    Returns:
+        DataFrame [ts_code, trade_date, close, open, high, low, pct_chg]
+    """
+    from .tushare.provider import TushareProvider
+    provider = TushareProvider()
+    return provider.fetch_index_daily(ts_code, start_date, end_date)
 
 
 def get_data_status() -> dict:

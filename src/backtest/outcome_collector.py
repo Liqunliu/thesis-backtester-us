@@ -112,7 +112,7 @@ def collect_forward_outcome(
 
     # 获取截面后12个月的日线数据（使用 YYYY-MM-DD 格式）
     end_date = _add_months(cutoff_date, 13)  # 多取1个月余量
-    start_date = (datetime.strptime(cutoff_date, "%Y-%m-%d") - timedelta(days=5)).strftime("%Y-%m-%d")
+    start_date = (datetime.strptime(cutoff_date, "%Y-%m-%d") - timedelta(days=15)).strftime("%Y-%m-%d")
 
     daily = api.get_daily(start_date, end_date, ts_code=ts_code)
     if daily.empty:

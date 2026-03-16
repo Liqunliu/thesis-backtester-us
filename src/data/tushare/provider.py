@@ -113,6 +113,21 @@ class TushareProvider:
         df = _format_date_col(df, 'trade_date')
         return df
 
+    # ---------- 指数日线 ----------
+
+    def fetch_index_daily(self, ts_code: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """获取指数日线行情 (如 000300.SH 沪深300, 000905.SH 中证500)"""
+        time.sleep(_API_SLEEP)
+        df = self._pro.index_daily(
+            ts_code=ts_code,
+            start_date=_fmt(start_date),
+            end_date=_fmt(end_date),
+        )
+        if df is None or df.empty:
+            return pd.DataFrame()
+        df = _format_date_col(df, 'trade_date')
+        return df[['ts_code', 'trade_date', 'close', 'open', 'high', 'low', 'pct_chg']]
+
     # ---------- 财报数据 (按股票) ----------
 
     def fetch_balancesheet(self, ts_code: str) -> pd.DataFrame:

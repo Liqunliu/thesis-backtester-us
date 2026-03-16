@@ -302,6 +302,34 @@ def _run_agent_concurrent(
     asyncio.run(_run_all())
 
 
+# ==================== Outcome 缓存序列化 ====================
+
+def _outcome_to_dict(outcome) -> dict:
+    """ForwardOutcome → 可 JSON 序列化的 dict"""
+    return {
+        'cutoff_price': outcome.cutoff_price,
+        'return_1m': outcome.return_1m,
+        'return_3m': outcome.return_3m,
+        'return_6m': outcome.return_6m,
+        'return_12m': outcome.return_12m,
+        'max_drawdown_6m': outcome.max_drawdown_6m,
+        'max_gain_6m': outcome.max_gain_6m,
+        'volatility_6m': outcome.volatility_6m,
+        'actual_dividends': outcome.actual_dividends,
+        'data_available_months': outcome.data_available_months,
+    }
+
+
+def _dict_to_outcome(ts_code: str, cutoff_date: str, d: dict):
+    """dict → ForwardOutcome"""
+    from src.backtest.outcome_collector import ForwardOutcome
+    o = ForwardOutcome(ts_code=ts_code, cutoff_date=cutoff_date)
+    for k, v in d.items():
+        if hasattr(o, k):
+            setattr(o, k, v)
+    return o
+
+
 # ==================== Step 3: backtest-eval ====================
 
 @dataclass
@@ -353,16 +381,55 @@ def step_eval(config: "StrategyConfig") -> Path:
         print("无数据可评估，请先运行 backtest-screen")
         return bt_dir
 
-    # 2. 采集前向收益
-    print(f"\n采集前向收益...")
+    # 2. 采集前向收益（带缓存 + 进度）
+    outcomes_dir = bt_dir / "outcomes_cache"
+    outcomes_dir.mkdir(parents=True, exist_ok=True)
+    total_stocks = sum(len(sl.candidates) for sl in slices)
+    done = 0
+    cached = 0
+    t0 = time.time()
+
+    print(f"\n采集前向收益 ({total_stocks} 只)...")
     for sl in slices:
         codes = sl.candidates['ts_code'].tolist()
+        # 尝试加载缓存
+        cache_path = outcomes_dir / f"outcomes_{sl.cutoff_date}.json"
+        cache_data = {}
+        if cache_path.exists():
+            try:
+                cache_data = json.loads(cache_path.read_text(encoding='utf-8'))
+            except Exception:
+                pass
+
         for ts_code in codes:
+            done += 1
+            # 命中缓存
+            if ts_code in cache_data:
+                outcome = _dict_to_outcome(ts_code, sl.cutoff_date, cache_data[ts_code])
+                sl.outcomes[ts_code] = outcome
+                cached += 1
+                continue
             try:
                 outcome = collect_forward_outcome(ts_code, sl.cutoff_date)
                 sl.outcomes[ts_code] = outcome
-            except Exception as e:
-                pass  # 静默跳过，eval 时标记为 N/A
+                cache_data[ts_code] = _outcome_to_dict(outcome)
+            except Exception:
+                pass
+            # 进度
+            if done % 20 == 0 or done == total_stocks:
+                elapsed = time.time() - t0
+                speed = done / elapsed if elapsed > 0 else 0
+                eta = (total_stocks - done) / speed if speed > 0 else 0
+                print(f"  [{done}/{total_stocks}] {sl.cutoff_date} "
+                      f"| {elapsed:.0f}s | {speed:.1f}只/s | ETA {eta:.0f}s")
+
+        # 写入缓存
+        cache_path.write_text(
+            json.dumps(cache_data, ensure_ascii=False, default=str),
+            encoding='utf-8',
+        )
+
+    print(f"  完成: {done} 只, 缓存命中 {cached}, 新采集 {done - cached}, 耗时 {time.time()-t0:.0f}s")
 
     # 3. 多基准评估
     print(f"\n计算绩效...")
@@ -381,7 +448,7 @@ def step_eval(config: "StrategyConfig") -> Path:
     print(f"\n{'='*60}")
     print(f"绩效摘要 (6个月前向)")
     print(f"{'='*60}")
-    for key in ['screen_all', 'screen_top', 'agent_buy', 'agent_top']:
+    for key in ['market', 'screen_all', 'screen_top', 'agent_buy', 'agent_top']:
         bl = performance.get(key, {})
         stats = bl.get('stats', {}).get('6个月', {})
         label = bl.get('label', key)
@@ -394,34 +461,110 @@ def step_eval(config: "StrategyConfig") -> Path:
             print(f"  {label}: 无数据")
 
     # Alpha
+    s_mkt = performance.get('market', {}).get('stats', {}).get('6个月', {})
     s_all = performance.get('screen_all', {}).get('stats', {}).get('6个月', {})
     s_buy = performance.get('agent_buy', {}).get('stats', {}).get('6个月', {})
-    if s_all.get('mean') is not None and s_buy.get('mean') is not None:
-        alpha = (s_buy['mean'] - s_all['mean']) * 100
-        print(f"\n  Agent Alpha (6m): {alpha:+.1f}pp")
+    mkt_mean = s_mkt.get('mean')
+    all_mean = s_all.get('mean')
+    buy_mean = s_buy.get('mean')
+    if all_mean is not None and mkt_mean is not None:
+        print(f"\n  Alpha (6m): 筛选池 vs 沪深300 = {(all_mean-mkt_mean)*100:+.1f}pp")
+    if buy_mean is not None and mkt_mean is not None:
+        print(f"  Alpha (6m): Agent买入 vs 沪深300 = {(buy_mean-mkt_mean)*100:+.1f}pp")
 
     print(f"\n报告: {report_path}")
     print(f"数据: {summary_path}")
     return report_path
 
 
+def _collect_index_returns(
+    dates: List[str],
+    forward_periods: List[dict],
+    index_code: str = '000300.SH',
+) -> dict:
+    """采集指数在各截面的前向收益，返回 {label: {count, mean, median, ...}}"""
+    from src.data import api
+    from src.backtest.outcome_collector import _add_months
+
+    if not dates:
+        return {}
+
+    # 一次性拉取指数全部数据
+    start = (datetime.strptime(min(dates), '%Y-%m-%d') - relativedelta(days=15)).strftime('%Y-%m-%d')
+    end = _add_months(max(dates), 13)
+    try:
+        idx_df = api.get_index_daily(index_code, start, end)
+    except Exception as e:
+        print(f"  警告: 无法获取指数 {index_code} 数据: {e}")
+        return {}
+
+    if idx_df.empty:
+        return {}
+
+    idx_df = idx_df.sort_values('trade_date')
+    idx_prices = idx_df.set_index('trade_date')['close']
+
+    stats = {}
+    for fp in forward_periods:
+        months = fp['months']
+        label = fp['label']
+        returns = []
+        for date in dates:
+            # 找截面日最近交易日
+            before = idx_prices[idx_prices.index <= date]
+            if before.empty:
+                continue
+            p0 = before.iloc[-1]
+            # 找 N 个月后最近交易日
+            target = _add_months(date, months)
+            after = idx_prices[idx_prices.index <= target]
+            if after.empty or after.index[-1] <= before.index[-1]:
+                continue
+            p1 = after.iloc[-1]
+            returns.append((p1 - p0) / p0)
+
+        if returns:
+            sorted_r = sorted(returns)
+            stats[label] = {
+                'count': len(returns),
+                'mean': sum(returns) / len(returns),
+                'median': sorted_r[len(sorted_r) // 2],
+                'win_rate': sum(1 for r in returns if r > 0) / len(returns),
+                'best': max(returns),
+                'worst': min(returns),
+            }
+        else:
+            stats[label] = {'count': 0}
+
+    stats['total_stocks'] = len(dates)
+    stats['total_slices'] = len(dates)
+    return stats
+
+
 def _evaluate_multi_baseline(
     slices: List[EvalSlice],
     config: "StrategyConfig",
 ) -> Dict[str, dict]:
-    """四基准绩效评估"""
+    """五基准绩效评估"""
     forward_periods = config.get_forward_periods()
     tiers = config.get_tiers()
     top_tier = tiers[0]['name'] if tiers else None
     buy_threshold = config.get_decision_thresholds().get('buy', 70)
 
+    # 全市场基准: 沪深300 指数
+    print(f"  采集沪深300指数基准...")
+    dates = [sl.cutoff_date for sl in slices]
+    market_stats = _collect_index_returns(dates, forward_periods, '000300.SH')
+
     baselines = {
+        'market': {'label': '沪深300', 'desc': '沪深300指数收益 (全市场基准)',
+                   'slices': [], 'stats': market_stats},
         'screen_all': {'label': '筛选池等权', 'desc': '所有通过量化筛选的候选'},
         'screen_top': {'label': f'筛选池 Top ({top_tier or "最高评级"})', 'desc': '量化筛选最高评级'},
         'agent_buy': {'label': 'Agent 买入', 'desc': f'Agent 建议"买入" (≥{buy_threshold}分)'},
         'agent_top': {'label': 'Agent Top5', 'desc': 'Agent 评分最高的5只'},
     }
-    for key in baselines:
+    for key in ['market', 'screen_all', 'screen_top', 'agent_buy', 'agent_top']:
         baselines[key]['slices'] = []
 
     for sl in slices:
@@ -464,9 +607,10 @@ def _evaluate_multi_baseline(
             _extract_returns([c for c, _ in scored[:5]], sl, forward_periods)
         )
 
-    # 汇总统计
-    for bl in baselines.values():
-        bl['stats'] = _aggregate_returns(bl['slices'], forward_periods)
+    # 汇总统计 (market 已有 stats，跳过)
+    for key, bl in baselines.items():
+        if key != 'market':
+            bl['stats'] = _aggregate_returns(bl['slices'], forward_periods)
 
     return baselines
 
@@ -552,7 +696,7 @@ def _format_eval_report(
         lines.extend([f"### {label}前向收益", ""])
         lines.append("| 基准 | 样本数 | 平均收益 | 中位数 | 胜率 | 最好 | 最差 |")
         lines.append("|------|--------|---------|--------|------|------|------|")
-        for key in ['screen_all', 'screen_top', 'agent_buy', 'agent_top']:
+        for key in ['market', 'screen_all', 'screen_top', 'agent_buy', 'agent_top']:
             bl = performance.get(key, {})
             stats = bl.get('stats', {}).get(label, {})
             bl_label = bl.get('label', key)
@@ -589,15 +733,23 @@ def _format_eval_report(
     lines.extend(["", "## Alpha 分析", ""])
     for fp in forward_periods:
         label = fp['label']
+        s_mkt = performance.get('market', {}).get('stats', {}).get(label, {})
         s_all = performance.get('screen_all', {}).get('stats', {}).get(label, {})
         s_buy = performance.get('agent_buy', {}).get('stats', {}).get(label, {})
-        if s_all.get('mean') is not None and s_buy.get('mean') is not None:
-            alpha = s_buy['mean'] - s_all['mean']
-            lines.append(
-                f"- **{label}**: Agent买入 vs 筛选池 alpha = "
-                f"{alpha*100:+.1f}pp "
-                f"({s_buy['mean']*100:+.1f}% vs {s_all['mean']*100:+.1f}%)"
-            )
+        mkt_mean = s_mkt.get('mean')
+        all_mean = s_all.get('mean')
+        buy_mean = s_buy.get('mean')
+
+        parts = []
+        if all_mean is not None and mkt_mean is not None:
+            parts.append(f"筛选池 vs 沪深300 = {(all_mean-mkt_mean)*100:+.1f}pp")
+        if buy_mean is not None and all_mean is not None:
+            parts.append(f"Agent买入 vs 筛选池 = {(buy_mean-all_mean)*100:+.1f}pp")
+        if buy_mean is not None and mkt_mean is not None:
+            parts.append(f"Agent买入 vs 沪深300 = {(buy_mean-mkt_mean)*100:+.1f}pp")
+
+        if parts:
+            lines.append(f"- **{label}**: {' | '.join(parts)}")
         else:
             lines.append(f"- **{label}**: 数据不足")
 
