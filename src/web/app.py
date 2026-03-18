@@ -167,7 +167,7 @@ with tab_analyze:
                 with st.status("获取实时数据...", expanded=True) as status_data:
                     st.write("正在从公开数据源获取财务数据...")
 
-                    from src.data.live_snapshot import create_live_snapshot
+                    from src.data.live_snapshot import create_live_snapshot, validate_live_snapshot
                     from src.data.snapshot import snapshot_to_markdown
 
                     snapshot = create_live_snapshot(ts_code.strip())
@@ -177,6 +177,17 @@ with tab_analyze:
                         for w in snapshot.warnings:
                             st.warning(w)
                     status_data.update(label=f"数据获取完成 ({len(snapshot.data_sources)} 个数据源)", state="complete")
+
+                # 数据完整性检查
+                is_valid, errors, data_warnings = validate_live_snapshot(snapshot)
+                for w in data_warnings:
+                    st.warning(w)
+                if not is_valid:
+                    st.error("❌ 核心财务数据获取失败，无法进行分析:")
+                    for e in errors:
+                        st.error(f"  - {e}")
+                    st.info("请检查股票代码是否正确，或稍后重试。")
+                    st.stop()
 
                 # Step 2: Agent 分析
                 chapters = config.get_chapter_defs()

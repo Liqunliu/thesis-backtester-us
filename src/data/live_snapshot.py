@@ -185,6 +185,36 @@ def create_live_snapshot(
         snapshot.warnings.append("无资产负债表")
     if snapshot.income.empty:
         snapshot.warnings.append("无利润表")
+    if snapshot.cashflow.empty:
+        snapshot.warnings.append("无现金流量表")
 
     logger.info(f"实时快照生成完成: {ts_code} | 数据源: {len(snapshot.data_sources)} | 警告: {len(snapshot.warnings)}")
     return snapshot
+
+
+def validate_live_snapshot(snapshot: "StockSnapshot") -> tuple:
+    """
+    检查实时快照的数据完整性
+
+    Returns:
+        (is_valid, errors): is_valid=True 可以继续分析，False 应中止
+    """
+    errors = []
+
+    # 必须有的数据（缺失则中止）
+    if snapshot.balancesheet.empty:
+        errors.append("资产负债表获取失败")
+    if snapshot.income.empty:
+        errors.append("利润表获取失败")
+    if snapshot.cashflow.empty:
+        errors.append("现金流量表获取失败")
+
+    # 建议有但不强制的数据
+    warnings = []
+    if snapshot.price_history.empty:
+        warnings.append("行情数据缺失，估值分析将受影响")
+    if snapshot.dividend.empty:
+        warnings.append("分红数据缺失，股息分析将受影响")
+
+    is_valid = len(errors) == 0
+    return is_valid, errors, warnings

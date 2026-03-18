@@ -275,7 +275,7 @@ def _cmd_live_analyze(config: StrategyConfig, args: list):
     import logging
     from pathlib import Path
     from datetime import datetime
-    from src.data.live_snapshot import create_live_snapshot
+    from src.data.live_snapshot import create_live_snapshot, validate_live_snapshot
     from src.data.snapshot import snapshot_to_markdown
     from src.agent.runtime import run_blind_analysis
 
@@ -304,6 +304,18 @@ def _cmd_live_analyze(config: StrategyConfig, args: list):
     print(f"  最新报告期: {snapshot.latest_report_period}")
     if snapshot.warnings:
         print(f"  警告: {', '.join(snapshot.warnings)}")
+
+    # 数据完整性检查
+    is_valid, errors, data_warnings = validate_live_snapshot(snapshot)
+    for w in data_warnings:
+        print(f"  ⚠ {w}")
+    if not is_valid:
+        print(f"\n❌ 数据不完整，无法进行分析:")
+        for e in errors:
+            print(f"  - {e}")
+        print("\n请检查网络连接或稍后重试。")
+        logging.getLogger().removeHandler(file_handler)
+        return
 
     # 保存原始数据
     raw_dir = live_dir / "raw_data"
