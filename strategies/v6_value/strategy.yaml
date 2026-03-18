@@ -119,6 +119,7 @@ screening:
 #   - 所有分析严格遵守 cutoff_date 时间边界
 
 framework:
+  operators_dir: operators/v1     # 锁定 v1 算子库（与回测结果 +7.1pp alpha 绑定）
   analyst_role: 严谨的价值投资分析师
 
   chapters:

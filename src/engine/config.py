@@ -86,6 +86,11 @@ class StrategyConfig:
         """获取输出 schema 模块路径"""
         return self._paths().get('output_schema') or self.raw.get('output_schema_module', '')
 
+    def get_operators_dir(self) -> Optional[str]:
+        """获取算子版本目录（如 'operators/v1'），None 使用默认"""
+        framework = self.raw.get('framework', {})
+        return framework.get('operators_dir', None)
+
     # ==================== 分析框架 ====================
 
     def get_chapter_defs(self) -> List[dict]:
@@ -105,7 +110,10 @@ class StrategyConfig:
     def get_operator_registry(self):
         """获取算子注册表 (延迟导入避免循环依赖)"""
         from .operators import OperatorRegistry
-        return OperatorRegistry(strategy_dir=self.strategy_dir)
+        return OperatorRegistry(
+            strategy_dir=self.strategy_dir,
+            operators_dir=self.get_operators_dir(),
+        )
 
     def get_chapter_focus(self, chapter_def: dict) -> str:
         """获取章节的分析重点 — 优先从算子组合, 回退到 focus 字段"""

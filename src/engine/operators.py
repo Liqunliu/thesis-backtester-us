@@ -112,19 +112,27 @@ def _split_frontmatter(text: str) -> tuple:
 class OperatorRegistry:
     """算子注册表 — 扫描并管理所有可用算子"""
 
-    def __init__(self, strategy_dir: Path = None):
+    def __init__(self, strategy_dir: Path = None, operators_dir: str = None):
         """
         Args:
             strategy_dir: 策略目录 (可选, 用于加载策略私有算子)
+            operators_dir: 算子版本目录 (如 'operators/v1')，None 使用默认 'operators/'
         """
         self._operators: Dict[str, Operator] = {}
-        self._load_global()
+        self._load_global(operators_dir)
         if strategy_dir:
             self._load_strategy(strategy_dir)
 
-    def _load_global(self):
-        """加载全局算子"""
-        global_dir = PROJECT_ROOT / "operators"
+    def _load_global(self, operators_dir: str = None):
+        """加载全局算子
+
+        Args:
+            operators_dir: 指定算子目录（如 'operators/v1'），None 则使用默认 'operators/'
+        """
+        if operators_dir:
+            global_dir = PROJECT_ROOT / operators_dir
+        else:
+            global_dir = PROJECT_ROOT / "operators"
         self._load_dir(global_dir)
 
     def _load_strategy(self, strategy_dir: Path):
