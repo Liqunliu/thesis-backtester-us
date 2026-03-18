@@ -76,7 +76,7 @@ def _print_usage():
     print("    batch-analyze <date> [--top N]        筛选 + 批量 Agent 分析")
     print()
     print("  实时分析:")
-    print("    live-analyze <code> [--no-blind]       单股实时分析 (免费数据, 无需 Tushare)")
+    print("    live-analyze <code> [--blind]           单股实时分析 (免费数据, 默认非盲测)")
     print()
     print("  回测 Pipeline (三步独立):")
     print("    backtest-screen                       ① 生成截面日期 + 逐截面筛选 + 保存 CSV")
@@ -280,7 +280,7 @@ def _cmd_live_analyze(config: StrategyConfig, args: list):
     from src.agent.runtime import run_blind_analysis
 
     ts_code = args[0]
-    blind_mode = "--no-blind" not in args
+    blind_mode = "--blind" in args  # live-analyze 默认非盲测，加 --blind 才盲测
     cutoff_date = datetime.now().strftime('%Y-%m-%d')
 
     # 输出目录: strategies/xxx/live/{ts_code}_{date}/

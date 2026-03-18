@@ -129,6 +129,34 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
             },
         },
     },
+    # ---- 实时增强数据工具（live-analyze 时可用）----
+    {
+        "type": "function",
+        "function": {
+            "name": "query_market_context",
+            "description": (
+                "查询市场环境信息：最新新闻、主力资金流向、大盘走势、行业板块表现。"
+                "仅在实时分析模式下可用，回测模式下返回空。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "info_type": {
+                        "type": "string",
+                        "enum": ["news", "fund_flow", "market_index", "industry_overview"],
+                        "description": (
+                            "信息类型: "
+                            "news=个股最新新闻, "
+                            "fund_flow=近期主力资金流向, "
+                            "market_index=大盘走势(沪深300), "
+                            "industry_overview=所属行业板块表现"
+                        ),
+                    },
+                },
+                "required": ["info_type"],
+            },
+        },
+    },
 ]
 
 
@@ -164,6 +192,8 @@ class ToolSandbox:
                 return self._query_financial_batch(**arguments)
             elif tool_name == "get_analysis_context":
                 return self._get_analysis_context()
+            elif tool_name == "query_market_context":
+                return self._query_market_context(**arguments)
             else:
                 return json.dumps({"error": f"未知工具: {tool_name}"}, ensure_ascii=False)
         except Exception as e:
@@ -226,6 +256,90 @@ class ToolSandbox:
             except Exception as e:
                 results[dt] = {"error": str(e)}
         return json.dumps(results, ensure_ascii=False, indent=2)
+
+    def _query_market_context(self, info_type: str) -> str:
+        """查询市场环境信息（实时增强数据）"""
+        snap = self.snapshot
+
+        if info_type == "news":
+            if snap.news.empty:
+                return json.dumps({"info": "当前模式下无新闻数据"}, ensure_ascii=False)
+            records = []
+            for _, row in snap.news.iterrows():
+                records.append({
+                    "title": str(row.get("title", "")),
+                    "content": str(row.get("content", ""))[:300],
+                    "datetime": str(row.get("datetime", "")),
+                    "source": str(row.get("source", "")),
+                })
+            return json.dumps({"news": records}, ensure_ascii=False, indent=2)
+
+        elif info_type == "fund_flow":
+            if snap.fund_flow.empty:
+                return json.dumps({"info": "当前模式下无资金流数据"}, ensure_ascii=False)
+            records = []
+            for _, row in snap.fund_flow.tail(10).iterrows():
+                record = {}
+                for col in ["trade_date", "close", "pct_chg", "main_net_inflow",
+                             "main_net_inflow_pct", "xl_net_inflow", "lg_net_inflow"]:
+                    val = row.get(col)
+                    if pd.notna(val):
+                        record[col] = round(float(val), 4) if isinstance(val, float) else str(val)
+                records.append(record)
+            return json.dumps({"fund_flow": records}, ensure_ascii=False, indent=2)
+
+        elif info_type == "market_index":
+            if snap.index_daily.empty:
+                return json.dumps({"info": "当前模式下无大盘数据"}, ensure_ascii=False)
+            recent = snap.index_daily.tail(10)
+            records = []
+            for _, row in recent.iterrows():
+                records.append({
+                    "trade_date": str(row.get("trade_date", "")),
+                    "close": round(float(row.get("close", 0)), 2),
+                })
+            # 计算近期涨跌
+            summary = {}
+            if len(snap.index_daily) >= 20:
+                d20 = float(snap.index_daily.iloc[-20]["close"])
+                d_now = float(snap.index_daily.iloc[-1]["close"])
+                summary["change_20d_pct"] = round((d_now - d20) / d20 * 100, 2)
+            if len(snap.index_daily) >= 5:
+                d5 = float(snap.index_daily.iloc[-5]["close"])
+                d_now = float(snap.index_daily.iloc[-1]["close"])
+                summary["change_5d_pct"] = round((d_now - d5) / d5 * 100, 2)
+            return json.dumps({"index": "沪深300", "recent": records, "summary": summary},
+                              ensure_ascii=False, indent=2)
+
+        elif info_type == "industry_overview":
+            if snap.industry_summary.empty:
+                return json.dumps({"info": "当前模式下无行业数据"}, ensure_ascii=False)
+            # 找本股所属行业
+            result = {"all_industries_count": len(snap.industry_summary)}
+            if snap.industry:
+                ind_name = snap.industry.replace('Ⅱ', '').replace('Ⅲ', '').strip()
+                matched = snap.industry_summary[
+                    snap.industry_summary['industry'].str.contains(ind_name, na=False)
+                ]
+                if not matched.empty:
+                    row = matched.iloc[0]
+                    result["current_industry"] = {
+                        "name": str(row.get("industry", "")),
+                        "pct_chg": str(row.get("pct_chg", "")),
+                        "net_inflow": str(row.get("net_inflow", "")),
+                        "up_count": str(row.get("up_count", "")),
+                        "down_count": str(row.get("down_count", "")),
+                    }
+            # Top 5 涨幅行业
+            top5 = snap.industry_summary.nlargest(5, 'pct_chg') if 'pct_chg' in snap.industry_summary.columns else pd.DataFrame()
+            if not top5.empty:
+                result["top5_industries"] = [
+                    {"name": str(r.get("industry", "")), "pct_chg": str(r.get("pct_chg", ""))}
+                    for _, r in top5.iterrows()
+                ]
+            return json.dumps(result, ensure_ascii=False, indent=2)
+
+        return json.dumps({"error": f"未知信息类型: {info_type}"}, ensure_ascii=False)
 
     def _query_financial_data(self, data_type: str, periods: int = 4) -> str:
         """统一数据查询入口"""
