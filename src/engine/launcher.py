@@ -75,6 +75,9 @@ def _print_usage():
     print("    agent-analyze <code> <date>           单只 Agent 分析")
     print("    batch-analyze <date> [--top N]        筛选 + 批量 Agent 分析")
     print()
+    print("  实时分析:")
+    print("    live-analyze <code> [--no-blind]       单股实时分析 (免费数据, 无需 Tushare)")
+    print()
     print("  回测 Pipeline (三步独立):")
     print("    backtest-screen                       ① 生成截面日期 + 逐截面筛选 + 保存 CSV")
     print("    backtest-agent [--retry N] [--dry-run] ② 并发 Agent 分析 (增量/重试/进度)")
@@ -112,6 +115,7 @@ def _print_usage():
     print(f"  python -m src.engine.launcher {S} backtest-screen")
     print(f"  python -m src.engine.launcher {S} backtest-agent")
     print(f"  python -m src.engine.launcher {S} backtest-eval")
+    print(f"  python -m src.engine.launcher {S} live-analyze 601288.SH")
 
 
 def _dispatch_strategy(config: StrategyConfig, command: str, args: list):
@@ -121,6 +125,8 @@ def _dispatch_strategy(config: StrategyConfig, command: str, args: list):
         _cmd_agent_analyze(config, args)
     elif command == "batch-analyze":
         _cmd_batch_analyze(config, args)
+    elif command == "live-analyze":
+        _cmd_live_analyze(config, args)
     elif command == "backtest-screen":
         _cmd_backtest_screen(config, args)
     elif command == "backtest-agent":
@@ -256,6 +262,114 @@ def _cmd_screen(config: StrategyConfig, args: list):
     result = screen_at_date(cutoff_date, top_n=top_n, config=config)
     print()
     print(format_screen_result(result))
+
+
+def _cmd_live_analyze(config: StrategyConfig, args: list):
+    """实时单股分析（免费数据，不需要 Tushare）"""
+    if not args:
+        print("用法: live-analyze <ts_code> [--no-blind]")
+        sys.exit(1)
+
+    import asyncio
+    import json
+    import logging
+    from pathlib import Path
+    from datetime import datetime
+    from src.data.live_snapshot import create_live_snapshot
+    from src.data.snapshot import snapshot_to_markdown
+    from src.agent.runtime import run_blind_analysis
+
+    ts_code = args[0]
+    blind_mode = "--no-blind" not in args
+    cutoff_date = datetime.now().strftime('%Y-%m-%d')
+
+    # 输出目录: strategies/xxx/live/{ts_code}_{date}/
+    live_dir = config.strategy_dir / "live" / f"{ts_code}_{cutoff_date}"
+    live_dir.mkdir(parents=True, exist_ok=True)
+
+    # 配置日志到文件
+    log_path = live_dir / "run.log"
+    file_handler = logging.FileHandler(log_path, encoding='utf-8')
+    file_handler.setFormatter(logging.Formatter('%(asctime)s %(name)s %(levelname)s %(message)s'))
+    logging.getLogger().addHandler(file_handler)
+
+    print(f"实时分析: {ts_code} @ {cutoff_date}")
+    print(f"输出目录: {live_dir}")
+    print()
+
+    # 1. 获取实时数据
+    print("[1/3] 获取实时数据...")
+    snapshot = create_live_snapshot(ts_code)
+    print(f"  数据源: {', '.join(snapshot.data_sources)}")
+    print(f"  最新报告期: {snapshot.latest_report_period}")
+    if snapshot.warnings:
+        print(f"  警告: {', '.join(snapshot.warnings)}")
+
+    # 保存原始数据
+    raw_dir = live_dir / "raw_data"
+    raw_dir.mkdir(exist_ok=True)
+    for attr in ['price_history', 'balancesheet', 'income', 'cashflow',
+                 'fina_indicator', 'dividend', 'top10_holders']:
+        df = getattr(snapshot, attr, None)
+        if df is not None and not df.empty:
+            df.to_csv(raw_dir / f"{attr}.csv", index=False, encoding='utf-8-sig')
+
+    # 保存 snapshot 元数据
+    snap_meta = {
+        'ts_code': snapshot.ts_code,
+        'stock_name': snapshot.stock_name,
+        'industry': snapshot.industry,
+        'cutoff_date': snapshot.cutoff_date,
+        'generated_at': snapshot.generated_at,
+        'latest_report_period': snapshot.latest_report_period,
+        'data_sources': snapshot.data_sources,
+        'warnings': snapshot.warnings,
+    }
+    (live_dir / "snapshot.json").write_text(
+        json.dumps(snap_meta, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    # 2. Agent 分析
+    print(f"\n[2/3] Agent 分析 ({'盲测' if blind_mode else '非盲测'})...")
+    result = asyncio.run(
+        run_blind_analysis(ts_code, cutoff_date, config, blind_mode, live_dir)
+    )
+
+    # 3. 输出结果
+    meta = result["metadata"]
+    synthesis = result.get("synthesis", {})
+    print(f"\n[3/3] 分析完成")
+    print(f"  耗时: {meta['elapsed_seconds']:.0f}秒")
+    print(f"  模型: {meta['model']}")
+    print(f"  章节: {meta['chapters_completed']} 章")
+
+    if synthesis:
+        print(f"\n{'='*60}")
+        print(f"综合研判: {snapshot.stock_name} ({ts_code})")
+        print(f"{'='*60}")
+        score = synthesis.get('综合评分', '?')
+        rec = synthesis.get('最终建议', '?')
+        stream = synthesis.get('流派判定', '?')
+        print(f"  评分: {score}")
+        print(f"  建议: {rec}")
+        print(f"  流派: {stream}")
+        buy_logic = synthesis.get('一句话买入逻辑（强制）', '')
+        if buy_logic:
+            print(f"  买入逻辑: {buy_logic[:80]}")
+        risks = synthesis.get('关键风险', [])
+        if risks:
+            print(f"  关键风险:")
+            for r in risks[:3]:
+                print(f"    - {r}")
+
+    print(f"\n输出目录: {live_dir}")
+    print(f"  raw_data/    原始数据")
+    print(f"  snapshot.json 快照元数据")
+    print(f"  *_report.md  完整分析报告")
+    print(f"  *_structured.json 结构化结论")
+    print(f"  run.log      运行日志")
+
+    # 清理日志 handler
+    logging.getLogger().removeHandler(file_handler)
 
 
 def _cmd_agent_analyze(config: StrategyConfig, args: list):
