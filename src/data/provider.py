@@ -210,6 +210,9 @@ def get_provider(name: str = None) -> DataProvider:
         if target == "tushare":
             from .tushare import TushareProvider
             register("tushare", TushareProvider())
+        elif target == "crawler":
+            from .crawler import CrawlerProvider
+            register("crawler", CrawlerProvider())
         else:
             raise ValueError(f"未知数据提供者: {target}，已注册: {list(_registry.keys())}")
 
