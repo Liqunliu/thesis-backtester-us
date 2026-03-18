@@ -87,8 +87,12 @@ config = StrategyConfig.from_yaml(selected_yaml)
 st.sidebar.caption(f"{config.name} v{config.version}")
 
 # 加载算子注册表
-registry = config.get_operator_registry()
-all_ops = registry.list_all()
+# 预设策略用策略指定的版本（v6_value → v1）
+# 自定义模式用 v2（最新算子库）
+registry_preset = config.get_operator_registry()
+from src.engine.operators import OperatorRegistry
+registry_v2 = OperatorRegistry()  # 默认加载 v2
+all_ops = registry_v2.list_all()
 all_op_ids = [op.id for op in all_ops]
 
 st.sidebar.divider()
@@ -116,33 +120,51 @@ with tab_analyze:
 
         if mode == "预设策略":
             chapters = config.get_chapter_defs()
-            st.caption(f"使用 {config.name} 的 {len(chapters)} 章分析框架")
+            ops_dir = config.get_operators_dir() or 'v2'
+            st.caption(f"使用 {config.name} 的 {len(chapters)} 章分析框架 (算子: {ops_dir})")
             # 展示各章算子
             for ch in chapters:
                 with st.expander(f"Ch{ch.get('chapter', '?')} {ch.get('title', '')}"):
                     ops = ch.get('operators', [])
                     for op_id in ops:
-                        op = registry.get(op_id)
+                        op = registry_preset.get(op_id)
                         if op:
                             st.markdown(f"- **{op.name}** (`{op.id}`)")
                         else:
                             st.markdown(f"- ~~{op_id}~~ (未找到)")
+            st.caption("＋ 综合研判（自动执行）")
         else:
-            # 自定义：从算子库勾选
-            st.caption("从算子库中选择要使用的算子")
-            all_tags = registry.all_tags()
-            tag_filter = st.multiselect("按标签筛选", all_tags)
+            # 自定义：按分类展示 v2 算子库
+            st.caption(f"从 v2 算子库中选择 ({len(all_ops)} 个可用)")
 
-            if tag_filter:
-                filtered = [op for op in all_ops if any(t in op.tags for t in tag_filter)]
-            else:
-                filtered = all_ops
+            # 按目录分类
+            categories = {}
+            for op in all_ops:
+                cat = str(op.source_path.parent.name) if op.source_path else '其他'
+                if cat not in categories:
+                    categories[cat] = []
+                categories[cat].append(op)
+
+            # 分类名映射
+            cat_labels = {
+                'screening': '📋 数据核查',
+                'fundamental': '📊 基本面',
+                'valuation': '💰 估值',
+                'decision': '🎯 决策',
+                'special': '⭐ 特殊分析',
+                'forward_risk': '🔮 前瞻风险（v2 新增）',
+            }
 
             selected_ops = []
-            for op in filtered:
-                if st.checkbox(f"{op.name} (`{op.id}`)", value=True, key=f"op_{op.id}"):
-                    selected_ops.append(op.id)
-            st.caption(f"已选择 {len(selected_ops)} 个算子")
+            for cat, ops in categories.items():
+                label = cat_labels.get(cat, cat)
+                with st.expander(f"{label} ({len(ops)} 个)", expanded=(cat == 'forward_risk')):
+                    for op in ops:
+                        default_on = cat != 'forward_risk'  # 新增算子默认不勾选
+                        if st.checkbox(f"{op.name}", value=default_on, key=f"op_{op.id}"):
+                            selected_ops.append(op.id)
+
+            st.caption(f"已选择 {len(selected_ops)} 个算子 ＋ 综合研判（自动执行）")
 
         # 运行按钮
         st.divider()
