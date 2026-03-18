@@ -200,6 +200,20 @@ strategies/        # 策略实例（4 个预设框架）
 
 </details>
 
+## 路线图
+
+| 时间 | 计划 |
+|------|------|
+| **2026 Q2** | 模拟盘第一期：沪深300 全量 Agent 评估 → Top 15 持仓 → 公开发布 → 年底对账 |
+| **2026 H2** | 三层生产架构：财报驱动评估（季度）+ 价格信号监控（每日）+ 资讯校验（触发时） |
+| **持续迭代** | 算子持续优化 · 样本扩大（120 → 500+）· 多策略对比 · 季度截面 |
+
+技术方向：
+- 算子 gate 引擎级强制执行（当前仅声明，由 LLM 自行遵守）
+- 分析结果缓存（同一天同股票复用已有数据）
+- 多 LLM 横评（DeepSeek / GPT / Claude 同策略对比）
+- 更多免费数据源接入（巨潮公告全文、研报摘要）
+
 ## 文档
 
 - [架构](docs/design/architecture.md) · [Agent](docs/design/agent.md) · [数据层](docs/design/data_layer.md) · [算子](docs/design/operators.md) · [筛选](docs/design/screener.md) · [回测](docs/design/backtest.md) · [评分](docs/design/scoring.md) · [实时分析](docs/design/live_analysis.md)
