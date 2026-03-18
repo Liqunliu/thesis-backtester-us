@@ -4,6 +4,8 @@ name: 巴菲特所有者收益计算
 category: valuation
 tags: [valuation, fcf, owner_earnings, buffett]
 data_needed: [income, cashflow, balancesheet]
+gate:
+  exclude_industry: [银行, 保险, 证券, 多元金融]
 outputs:
   - field: owner_earnings
     type: float
@@ -17,9 +19,14 @@ outputs:
   - field: maintenance_capex
     type: float
     desc: 维持性资本支出(亿元)
+  - field: owner_earnings_valid
+    type: bool
+    desc: 所有者收益计算是否有效(负值时为false)
 ---
 
 ## 巴菲特所有者收益(Owner Earnings)计算
+
+> **与 valuation_fcf 的关系**：本算子计算巴菲特式"股东盈余"（Owner Earnings），侧重于维持性CAPEX的估算和利润质量验证。valuation_fcf 算子负责完整的FCF估值体系（EV/FCF倍数分档、多维估值矩阵）。两者的FCF计算可能产生不同结果——当出现差异时，以本算子的 Owner Earnings 作为利润质量基准，以 valuation_fcf 的估值框架作为定价基准。
 
 ### 零、金融行业适用性判断（前置门控）
 
@@ -37,6 +44,15 @@ outputs:
 ```
 
 **输出要求**：若触发金融行业门控，`owner_earnings` 填替代方法计算值，`owner_earnings_formula` 明确标注"金融行业替代方法"及具体公式，`fcf` 填 0（不适用），`maintenance_capex` 填 0（不适用）。
+
+### 负Owner Earnings处理
+
+当计算出的Owner Earnings为负时：
+
+1. **检查原因**：是维持性CAPEX估算过高，还是经营利润本身为负？
+2. **调整维持性CAPEX**：若问题在CAPEX估算，尝试使用折旧额作为维持性CAPEX的下限重新计算
+3. **使用EBITDA替代**：若调整后仍为负，以EBITDA作为利润质量的参考指标
+4. **标记**：在输出中标注 `owner_earnings_valid: false`，并说明原因
 
 ### 一、核心公式
 
@@ -153,12 +169,12 @@ outputs:
 ```
 所有者收益收益率 = 所有者收益 / 市值 x 100%
 
-评级标准：
-> 20%：极度低估，真实造血能力远超市场定价
-15-20%：明显低估
-10-15%：合理偏低
-5-10%：合理
-< 5%：偏高估
+评级标准（阈值已与策略统一标准对齐）：
+> 12%：极度低估（通常伴随市场恐慌或结构性折价）
+8-12%：显著低估
+5-8%：合理偏低
+3-5%：合理
+< 3%：偏贵
 
 EV/所有者收益 = (市值 - 净现金) / 所有者收益
 （参考EV/FCF五档评级标准）

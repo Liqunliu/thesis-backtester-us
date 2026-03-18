@@ -26,6 +26,7 @@ data/private/
 .env.*
 !.env.example
 .conda/
+.venv
 
 # OS
 .DS_Store

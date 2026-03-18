@@ -139,6 +139,39 @@ python -m src.engine.launcher strategies/v6_value/strategy.yaml backtest-agent  
 python -m src.engine.launcher strategies/v6_value/strategy.yaml backtest-eval     # 分钟级
 ```
 
+## 实时分析工作台
+
+支持单股实时深度分析（免费数据，无需 Tushare）：
+
+```bash
+# CLI
+python -m src.engine.launcher strategies/v6_enhanced/strategy.yaml live-analyze 601288.SH
+
+# Web 工作台
+streamlit run src/web/app.py
+```
+
+![投研分析工作台](docs/app_image/01_home.png)
+
+<details>
+<summary>查看分析过程截图</summary>
+
+![数据获取](docs/app_image/02_data_fetching.png)
+![分析进度](docs/app_image/03_chapter_progress.png)
+![分析运行](docs/app_image/04_analysis_running.png)
+![分析结果](docs/app_image/05_result.png)
+
+</details>
+
+4 个预设分析框架：
+
+| 框架 | 章节 | 定位 |
+|------|------|------|
+| V6 价值投资 | 6 章 | 回测验证版（+7.1pp alpha） |
+| V6 增强分析 | 8 章 | 深度分析 + 前瞻风险 + 一致性裁决 |
+| 快速评估 | 3 章 | 10-15 分钟快速判断 |
+| 收息型分析 | 5 章 | 高股息可持续性专用 |
+
 ## 关键设计
 
 | 设计 | 做法 | 为什么 |

@@ -16,7 +16,7 @@
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -41,6 +41,7 @@ class Operator:
     tags: List[str] = field(default_factory=list)
     data_needed: List[str] = field(default_factory=list)
     outputs: List[OperatorOutput] = field(default_factory=list)
+    gate: Dict[str, Any] = field(default_factory=dict)  # 行业门控 {exclude_industry: [...]}
     weight: float = 1.0         # LLM 评分权重 (多算子加权平均)
     score_range: str = "0-100"  # 评分范围
     content: str = ""           # markdown 正文 (不含 frontmatter)
@@ -80,6 +81,7 @@ class Operator:
             tags=meta.get('tags', []),
             data_needed=meta.get('data_needed', []),
             outputs=outputs,
+            gate=meta.get('gate', {}),
             weight=float(meta.get('weight', 1.0)),
             score_range=meta.get('score_range', '0-100'),
             content=body.strip(),

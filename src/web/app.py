@@ -25,7 +25,6 @@ import streamlit as st
 import pandas as pd
 
 from src.engine.config import StrategyConfig
-from src.engine.operators import OperatorRegistry
 
 # ==================== 页面配置 ====================
 
@@ -76,26 +75,28 @@ def load_analysis_history(config: StrategyConfig) -> list:
 # ==================== 侧边栏 ====================
 
 st.sidebar.header("📊 投研分析工作台")
+st.sidebar.caption("选择框架 → 输入代码 → 开始分析（约 5-15 分钟）")
 
+# 加载所有可用策略
 strategies = find_strategies()
 if not strategies:
     st.error("未找到策略文件")
     st.stop()
 
-selected_yaml = st.sidebar.selectbox("策略", strategies)
-config = StrategyConfig.from_yaml(selected_yaml)
-st.sidebar.caption(f"{config.name} v{config.version}")
+# 策略标签和描述
+strategy_labels = {}
+strategy_descs = {}
+for s in strategies:
+    c = StrategyConfig.from_yaml(s)
+    chapters = c.get_chapter_defs()
+    strategy_labels[s] = f"{c.name} ({len(chapters)} 章)"
 
-# 加载算子注册表
-# 预设策略用策略指定的版本（v6_value → v1）
-# 自定义模式用 v2（最新算子库）
-registry_preset = config.get_operator_registry()
-from src.engine.operators import OperatorRegistry
-registry_v2 = OperatorRegistry()  # 默认加载 v2
-all_ops = registry_v2.list_all()
-all_op_ids = [op.id for op in all_ops]
-
-st.sidebar.divider()
+_STRATEGY_DESCS = {
+    'v6_value': '回测验证版 · 6 章基础分析 · v1 算子（冻结）· +7.1pp alpha',
+    'v6_enhanced': '深度分析 · 8 章含前瞻风险 · v2 算子 · 一致性裁决 · 排雷优先',
+    'quick_scan': '快速评估 · 3 章 10-15 分钟 · 高分建议用增强版确认',
+    'income_focus': '收息专用 · 5 章聚焦股息可持续性 · 股息率≥4% 门槛',
+}
 
 # ==================== 主区域：两个 Tab ====================
 
@@ -115,61 +116,44 @@ with tab_analyze:
         # 股票代码
         ts_code = st.text_input("股票代码", value="601288.SH", placeholder="601288.SH")
 
-        # 策略模式
-        mode = st.radio("算子选择", ["预设策略", "自定义组合"], horizontal=True)
+        # 分析框架选择
+        selected_yaml = st.selectbox(
+            "分析框架",
+            strategies,
+            format_func=lambda s: strategy_labels.get(s, s),
+        )
+        config = StrategyConfig.from_yaml(selected_yaml)
+        registry = config.get_operator_registry()
+        chapters = config.get_chapter_defs()
 
-        if mode == "预设策略":
-            chapters = config.get_chapter_defs()
-            ops_dir = config.get_operators_dir() or 'v2'
-            st.caption(f"使用 {config.name} 的 {len(chapters)} 章分析框架 (算子: {ops_dir})")
-            # 展示各章算子
-            for ch in chapters:
-                with st.expander(f"Ch{ch.get('chapter', '?')} {ch.get('title', '')}"):
-                    ops = ch.get('operators', [])
-                    for op_id in ops:
-                        op = registry_preset.get(op_id)
-                        if op:
-                            st.markdown(f"- **{op.name}** (`{op.id}`)")
-                        else:
-                            st.markdown(f"- ~~{op_id}~~ (未找到)")
-            st.caption("＋ 综合研判（自动执行）")
-        else:
-            # 自定义：按分类展示 v2 算子库
-            st.caption(f"从 v2 算子库中选择 ({len(all_ops)} 个可用)")
+        # 策略描述
+        strategy_key = Path(selected_yaml).parent.name
+        desc = _STRATEGY_DESCS.get(strategy_key, '')
+        if desc:
+            st.info(desc)
 
-            # 按目录分类
-            categories = {}
-            for op in all_ops:
-                cat = str(op.source_path.parent.name) if op.source_path else '其他'
-                if cat not in categories:
-                    categories[cat] = []
-                categories[cat].append(op)
+        # 展示框架章节
+        ops_dir = config.get_operators_dir() or 'v2'
+        total_ops = set()
+        for ch in chapters:
+            total_ops.update(ch.get('operators', []))
+        st.caption(f"{len(chapters)} 章 · {len(total_ops)} 算子 · {ops_dir}")
 
-            # 分类名映射
-            cat_labels = {
-                'screening': '📋 数据核查',
-                'fundamental': '📊 基本面',
-                'valuation': '💰 估值',
-                'decision': '🎯 决策',
-                'special': '⭐ 特殊分析',
-                'forward_risk': '🔮 前瞻风险（v2 新增）',
-            }
-
-            selected_ops = []
-            for cat, ops in categories.items():
-                label = cat_labels.get(cat, cat)
-                with st.expander(f"{label} ({len(ops)} 个)", expanded=(cat == 'forward_risk')):
-                    for op in ops:
-                        default_on = cat != 'forward_risk'  # 新增算子默认不勾选
-                        if st.checkbox(f"{op.name}", value=default_on, key=f"op_{op.id}"):
-                            selected_ops.append(op.id)
-
-            st.caption(f"已选择 {len(selected_ops)} 个算子 ＋ 综合研判（自动执行）")
+        for ch in chapters:
+            with st.expander(f"Ch{ch.get('chapter', '?')} {ch.get('title', '')}"):
+                ops = ch.get('operators', [])
+                for op_id in ops:
+                    op = registry.get(op_id)
+                    if op:
+                        st.markdown(f"- **{op.name}**")
+                    else:
+                        st.markdown(f"- ~~{op_id}~~ (未找到)")
+        st.caption("＋ 综合研判（自动执行）")
 
         # 运行按钮
         st.divider()
         blind = st.checkbox("盲测模式（隐藏公司名称）", value=False)
-        run_btn = st.button("▶ 开始分析", type="primary", use_container_width=True)
+        run_btn = st.button("▶ 开始分析", type="primary", width='stretch')
 
     # ---- 分析过程 & 结果 ----
     with col_right:
@@ -344,17 +328,24 @@ with tab_analyze:
             ```
             """)
 
-            # 展示算子库概览
-            st.subheader(f"算子库 ({len(all_ops)} 个)")
-            op_rows = []
-            for op in all_ops:
-                op_rows.append({
-                    'ID': op.id,
-                    '名称': op.name,
-                    '标签': ', '.join(op.tags),
-                    '数据需求': ', '.join(op.data_needed),
+            # 展示所有可用策略对比
+            st.subheader("可用分析框架")
+            strat_rows = []
+            for s in strategies:
+                c = StrategyConfig.from_yaml(s)
+                chs = c.get_chapter_defs()
+                ops = set()
+                for ch in chs:
+                    ops.update(ch.get('operators', []))
+                key = Path(s).parent.name
+                strat_rows.append({
+                    '框架': c.name,
+                    '版本': c.version,
+                    '章节': len(chs),
+                    '算子': len(ops),
+                    '说明': _STRATEGY_DESCS.get(key, ''),
                 })
-            st.dataframe(pd.DataFrame(op_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(strat_rows), width='stretch', hide_index=True)
 
 
 # ==================== Tab 2: 历史记录 ====================
@@ -374,7 +365,7 @@ with tab_history:
                       'stream': '流派', 'elapsed': '耗时(s)'}
         st.dataframe(
             hist_df[display_cols].rename(columns=col_rename),
-            use_container_width=True, hide_index=True,
+            width='stretch', hide_index=True,
         )
 
         # 查看详情
