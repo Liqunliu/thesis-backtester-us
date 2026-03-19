@@ -1,12 +1,12 @@
-# Thesis Backtester — AI-Powered Investment Analysis Framework
+# Thesis Backtester — AI-Driven Investment Thesis Analysis & Backtesting Framework
 
-> Markdown operators + DAG orchestration + LLM step-by-step reasoning + multi-baseline backtest validation
+> Turn investment analysis methodology into an executable process — let AI analyze stocks step by step following a research framework, and validate results through historical backtesting.
 
-Encode investment analysis methodology as executable operators, orchestrate them into a DAG with dependencies, and let LLM execute chapter by chapter — each step builds on the conclusions of the previous one. Not free-form AI chat, but **structured analysis following your methodology**.
+The analysis framework is decomposed into reusable steps, executed by the engine in dependency order, with each step building on the conclusions of the previous one — reducing the skipping, omission, and instability of single-prompt approaches.
 
-## Backtest Results: +7.1pp Alpha
+## Flagship Case: V6 Value Investing Framework
 
-120 stocks × 12 half-year cross-sections × 5 years (2020-2025), 5-baseline comparison:
+Current V6 value investing case: 120 stocks × 12 half-year cross-sections × 5 years (2020–2025), 5-baseline comparison:
 
 | Baseline | Samples | 6M Return | Win Rate | vs CSI300 |
 |----------|---------|----------|----------|-----------|
@@ -16,6 +16,11 @@ Encode investment analysis methodology as executable operators, orchestrate them
 
 ![Cumulative Return Chart](strategies/v6_value/backtest/backtest_chart_20260316_1448.png)
 
+**Avoidance signals are even stronger**: 73% of stocks the Agent flagged "avoid" subsequently declined. Risk avoidance alpha (-14.8pp) significantly exceeds stock selection alpha (+6.4pp).
+
+<details>
+<summary>Alpha decomposition</summary>
+
 ```
 CSI300          +0.9%
                   │ +3.0pp  screening alpha
@@ -24,17 +29,21 @@ Screen Pool     +4.0%
 Agent Buy       +8.1%    end-to-end alpha: +7.1pp
 ```
 
-**Avoid signals are even stronger**: 73% of stocks the Agent flagged "avoid" subsequently declined. Risk avoidance alpha (-14.8pp) is 2.3x stock selection alpha (+6.4pp).
+Risk avoidance alpha (-14.8pp) vs stock selection alpha (+6.4pp)
+
+</details>
 
 > [Full report](strategies/v6_value/backtest/backtest_report_20260316_1448.md) · [Structured data](strategies/v6_value/backtest/backtest_summary_20260316_1448.json) · [120 analysis reports](strategies/v6_value/backtest/agent_reports/)
 
-## Live Analysis Workbench
+## Try It in 3 Minutes
+
+> After completing setup below, run:
 
 ```bash
-# Single stock real-time analysis (free data, no Tushare needed)
+# ① Analyze a single stock (free public data)
 python -m src.engine.launcher strategies/v6_enhanced/strategy.yaml live-analyze 601288.SH
 
-# Web workbench
+# ② Or launch the web workbench
 streamlit run src/web/app.py
 ```
 
@@ -59,9 +68,13 @@ streamlit run src/web/app.py
 | Quick Scan | 3 | 10-15 min fast assessment |
 | Income Focus | 5 | Dividend sustainability |
 
-## Core Design
+## Why This Is Not Just Another AI Stock Analyzer
 
-**Operator DAG orchestration > single prompt**: each step's conclusion flows into the next, producing measurably better results through chained reasoning.
+- **Not a one-shot Q&A** — follows a fixed research framework, analyzing chapter by chapter
+- **Not loose multi-turn chat** — each step's conclusions are explicitly passed to the next
+- **Not just a current opinion** — can be validated against historical data through backtesting
+
+## Core Design
 
 ```
 strategy.yaml                    All-in-one config: screening + framework + scoring + LLM
@@ -134,18 +147,12 @@ Each step is independent — can be interrupted and resumed. Agent automatically
 
 </details>
 
-## Quick Start
+## Setup
 
 ```bash
 pip install -e .
 export LLM_API_KEY="your_key"
 export LLM_BASE_URL="https://api.deepseek.com"
-
-# Live analysis (free data, no Tushare needed)
-python -m src.engine.launcher strategies/v6_enhanced/strategy.yaml live-analyze 601288.SH
-
-# Or launch web workbench
-streamlit run src/web/app.py
 ```
 
 <details>
@@ -194,6 +201,18 @@ strategies/        # Strategy instances (4 presets)
 
 </details>
 
+## Who Is This For
+
+- Anyone wanting to structure investment analysis methodology into a reusable, executable process
+- Researchers testing whether AI can stably analyze stocks following a research framework
+- Developers looking to reproduce thesis backtesting approaches
+
+**Not for**: high-frequency trading, general-purpose quant backtesting platforms, or zero-config live trading.
+
+## Current Boundaries
+
+The most thoroughly validated case is V6 Value Investing; other preset frameworks are more exploratory analysis tools that have not yet achieved equivalent backtest validation. Results are primarily based on A-share value investing scenarios — cross-market and cross-model generalization is still under continuous validation.
+
 ## Roadmap
 
 | Timeline | Plan |
@@ -202,7 +221,8 @@ strategies/        # Strategy instances (4 presets)
 | **2026 H2** | 3-layer production: earnings-driven analysis (quarterly) + price monitoring (daily) + news verification (on-trigger) |
 | **Ongoing** | Operator refinement · sample expansion (120 → 500+) · multi-strategy comparison |
 
-Tech directions:
+## Tech Directions
+
 - Engine-level gate enforcement (currently declarative only)
 - Same-day result caching
 - Multi-LLM comparison (DeepSeek / GPT / Claude)
