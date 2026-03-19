@@ -1,12 +1,12 @@
-# Thesis Backtester — AI 驱动的投资分析框架
+# Thesis Backtester — AI 驱动的投资命题分析与回测框架
 
-> 用 Markdown 写分析方法论，引擎按 DAG 严格执行，LLM 逐步推理。
+> 把投资分析方法论变成可执行流程，让 AI 按研究框架逐步分析股票，并用历史回测验证结果。
 
-把投资分析方法论编码为可执行算子，按依赖关系编排成 DAG，LLM 逐章执行——后一步建立在前一步的结论之上。不是让 AI 自由发挥，是让 AI **按你的方法严格分析**。
+分析框架被拆成可复用步骤，由引擎按依赖顺序逐步执行，让后一步建立在前一步结论之上，减少单次 Prompt 的跳步和遗漏。
 
-## 回测结果：+7.1pp Alpha
+## 当前旗舰案例：V6 价值投资框架
 
-120 只股票 × 12 个半年截面 × 5 年（2020-2025），五基准对比：
+当前 V6 价值投资案例：120 只股票 × 12 个半年截面 × 5 年（2020–2025），五基准对比：
 
 | 基准 | 样本 | 6m 收益 | 胜率 | vs 沪深300 |
 |------|------|--------|------|-----------|
@@ -16,6 +16,11 @@
 
 ![累计收益曲线](strategies/v6_value/backtest/backtest_chart_20260316_1448.png)
 
+**回避信号更强**：Agent 回避的股票 73% 后续下跌，排雷 alpha（-14.8pp）显著高于选股 alpha（+6.4pp）。
+
+<details>
+<summary>Alpha 分解</summary>
+
 ```
 沪深300        +0.9%
                  │ +3.0pp  量化筛选 alpha
@@ -24,17 +29,21 @@
 Agent 买入      +8.1%    端到端 alpha: +7.1pp
 ```
 
-**回避信号更强**：Agent 回避的股票 73% 后续下跌，排雷 alpha（-14.8pp）是选股 alpha（+6.4pp）的 2.3 倍。
+排雷 alpha（-14.8pp）vs 选股 alpha（+6.4pp）
+
+</details>
 
 > [完整报告](strategies/v6_value/backtest/backtest_report_20260316_1448.md) · [结构化数据](strategies/v6_value/backtest/backtest_summary_20260316_1448.json) · [120 份分析报告](strategies/v6_value/backtest/agent_reports/)
 
-## 实时分析工作台
+## 3 分钟快速体验
+
+> 完成下方"安装与配置"后，可先运行：
 
 ```bash
-# 单股实时分析（免费数据，无需 Tushare）
+# ① 分析一只股票（免费公开数据）
 python -m src.engine.launcher strategies/v6_enhanced/strategy.yaml live-analyze 601288.SH
 
-# Web 工作台
+# ② 或打开 Web 工作台
 streamlit run src/web/app.py
 ```
 
@@ -59,9 +68,13 @@ streamlit run src/web/app.py
 | 快速评估 | 3 章 | 10-15 分钟快速判断 |
 | 收息型分析 | 5 章 | 高股息可持续性专用 |
 
-## 核心设计
+## 为什么不是普通的 AI 股票分析
 
-**算子 DAG 编排 > 单次 Prompt**：每步结论传递给下一步，链式推理产出更好的结果。
+- **不是一次性问答**，而是按固定研究框架逐章分析
+- **不是松散多轮对话**，而是前一步结论显式传给后一步
+- **不是只给当下观点**，而是可以放回历史里做回测验证
+
+## 核心设计
 
 ```
 strategy.yaml                    一站式配置：筛选 + 分析框架 + 评分体系 + LLM
@@ -134,18 +147,12 @@ python -m src.engine.launcher strategies/v6_value/strategy.yaml backtest-eval   
 
 </details>
 
-## 快速开始
+## 安装与配置
 
 ```bash
 pip install -e .
 export LLM_API_KEY="your_key"
 export LLM_BASE_URL="https://api.deepseek.com"
-
-# 实时分析（免费数据，无需 Tushare）
-python -m src.engine.launcher strategies/v6_enhanced/strategy.yaml live-analyze 601288.SH
-
-# 或启动 Web 工作台
-streamlit run src/web/app.py
 ```
 
 <details>
@@ -200,6 +207,18 @@ strategies/        # 策略实例（4 个预设框架）
 
 </details>
 
+## 适合谁
+
+- 想把投资分析方法论结构化、可复用的人
+- 想测试 AI 是否能按研究框架稳定分析股票的人
+- 想复现投资命题回测（thesis backtesting）思路的开发者
+
+**不适合**：高频交易引擎、通用量化回测平台、零配置实盘交易工具。
+
+## 当前边界
+
+当前最完整验证的是 V6 价值投资案例；其他预设框架更偏分析工具，尚未达到同等回测验证强度。结果主要基于 A 股价值投资场景，跨市场、跨模型的泛化能力仍在持续验证中。
+
 ## 路线图
 
 | 时间 | 计划 |
@@ -208,7 +227,8 @@ strategies/        # 策略实例（4 个预设框架）
 | **2026 H2** | 三层生产架构：财报驱动评估（季度）+ 价格信号监控（每日）+ 资讯校验（触发时） |
 | **持续迭代** | 算子持续优化 · 样本扩大（120 → 500+）· 多策略对比 · 季度截面 |
 
-技术方向：
+## 技术方向
+
 - 算子 gate 引擎级强制执行（当前仅声明，由 LLM 自行遵守）
 - 分析结果缓存（同一天同股票复用已有数据）
 - 多 LLM 横评（DeepSeek / GPT / Claude 同策略对比）
