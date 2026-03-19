@@ -1,6 +1,13 @@
 # Thesis Backtester — AI-Driven Investment Thesis Analysis & Backtesting Framework
 
-> Turn investment analysis methodology into an executable process — let AI analyze stocks step by step following a research framework, and validate results through historical backtesting.
+> Turn investment analysis methodology into an executable process — let AI analyze investment theses step by step following a research framework, and validate results through historical backtesting.
+
+Traditional quant backtesting validates numerical rules (e.g. "buy when PE < 10"). Thesis Backtester validates the questions closer to real investment research:
+
+- Is this high dividend sustainable, or borrowing from the future?
+- Is the low PE genuinely cheap, or a value trap?
+- Is management creating value or doing financial engineering?
+- Can this business model survive a downturn?
 
 The analysis framework is decomposed into reusable steps, executed by the engine in dependency order, with each step building on the conclusions of the previous one — reducing the skipping, omission, and instability of single-prompt approaches.
 
