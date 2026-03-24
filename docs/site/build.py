@@ -74,6 +74,9 @@ def build_operators() -> dict:
         dir_category = md_path.parent.name
         category = fm.get("category", dir_category)
 
+        # Relative path for GitHub raw URL
+        rel_path = str(md_path.relative_to(PROJECT_ROOT))
+
         entry = {
             "id": fm["id"],
             "name": fm.get("name", fm["id"]),
@@ -82,6 +85,7 @@ def build_operators() -> dict:
             "tags": fm.get("tags", []),
             "data_needed": fm.get("data_needed", []),
             "outputs": fm.get("outputs", []),
+            "file_path": rel_path,
         }
 
         # Include gate info if present

@@ -140,9 +140,17 @@
 
     grid.innerHTML = ops.map((op) => buildCardHTML(op)).join("");
 
-    // Bind card expand/collapse
+    // Bind card expand/collapse + lazy load content
     grid.querySelectorAll(".op-card").forEach((card) => {
-      card.addEventListener("click", () => card.classList.toggle("expanded"));
+      card.addEventListener("click", () => {
+        const wasExpanded = card.classList.contains("expanded");
+        card.classList.toggle("expanded");
+        // Lazy load markdown content on first expand
+        if (!wasExpanded && !card.dataset.loaded) {
+          const opId = card.dataset.id;
+          loadOperatorContent(card, opId);
+        }
+      });
     });
   }
 
@@ -189,8 +197,65 @@
       html += "</div></div>";
     }
 
+    // Content area (lazy loaded)
+    html += '<div class="detail-section content-area"><h4>分析指引</h4><div class="op-content-body">点击展开后加载...</div></div>';
+
     html += "</div></div>";
     return html;
+  }
+
+  // ---- Load operator markdown content ----
+  const GITHUB_RAW = "https://raw.githubusercontent.com/turtlequant/thesis-backtester/main/";
+  const contentCache = {};
+
+  function loadOperatorContent(card, opId) {
+    // Find file_path from data
+    let filePath = null;
+    Object.values(operatorsData.categories).forEach((ops) => {
+      ops.forEach((op) => { if (op.id === opId) filePath = op.file_path; });
+    });
+    if (!filePath) return;
+
+    const body = card.querySelector(".op-content-body");
+    if (!body) return;
+
+    // Check cache
+    if (contentCache[opId]) {
+      body.innerHTML = renderMarkdown(contentCache[opId]);
+      card.dataset.loaded = "1";
+      return;
+    }
+
+    body.innerHTML = '<span style="color:var(--text-muted);">加载中...</span>';
+
+    fetch(GITHUB_RAW + filePath)
+      .then((r) => r.ok ? r.text() : Promise.reject("fetch failed"))
+      .then((text) => {
+        // Strip frontmatter
+        const parts = text.split("---");
+        const content = parts.length >= 3 ? parts.slice(2).join("---").trim() : text;
+        contentCache[opId] = content;
+        body.innerHTML = renderMarkdown(content);
+        card.dataset.loaded = "1";
+      })
+      .catch(() => {
+        body.innerHTML = '<span style="color:var(--text-muted);">内容加载失败，请查看 <a href="https://github.com/turtlequant/thesis-backtester/blob/main/' + filePath + '" target="_blank">GitHub 源文件</a></span>';
+        card.dataset.loaded = "1";
+      });
+  }
+
+  function renderMarkdown(md) {
+    // Simple markdown → HTML (headings, bold, lists, code)
+    return md
+      .replace(/^### (.+)$/gm, '<h5>$1</h5>')
+      .replace(/^## (.+)$/gm, '<h4>$1</h4>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/^\- (.+)$/gm, '<li>$1</li>')
+      .replace(/^(\d+)\. (.+)$/gm, '<li>$2</li>')
+      .replace(/\|(.+)\|/g, (m) => '<tr>' + m.split('|').filter(Boolean).map(c => '<td>' + c.trim() + '</td>').join('') + '</tr>')
+      .replace(/\n\n/g, '<br><br>')
+      .replace(/\n/g, '<br>');
   }
 
   // ---- Render Strategies Tab ----
