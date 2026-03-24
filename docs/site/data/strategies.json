@@ -1,0 +1,507 @@
+[
+  {
+    "name": "bank_analysis",
+    "display_name": "银行业深度分析",
+    "version": "1.0",
+    "analyst_role": "银行业投资分析师",
+    "chapters": [
+      {
+        "id": "ch01_screening",
+        "chapter": 1,
+        "title": "数据核查与快速筛选",
+        "operators": [
+          "data_source_grading",
+          "quick_screen_5min"
+        ],
+        "dependencies": []
+      },
+      {
+        "id": "ch02_fundamental",
+        "chapter": 2,
+        "title": "基本面与治理结构",
+        "operators": [
+          "soe_identification",
+          "stream_classification",
+          "management_integrity"
+        ],
+        "dependencies": [
+          "ch01_screening"
+        ]
+      },
+      {
+        "id": "ch03_bank_core",
+        "chapter": 3,
+        "title": "盈利能力与资产质量",
+        "operators": [
+          "bank_nim",
+          "asset_quality"
+        ],
+        "dependencies": [
+          "ch01_screening",
+          "ch02_fundamental"
+        ]
+      },
+      {
+        "id": "ch04_valuation",
+        "chapter": 4,
+        "title": "估值与安全边际",
+        "operators": [
+          "pb_roe_valuation",
+          "valuation_dividend",
+          "safety_margin"
+        ],
+        "dependencies": [
+          "ch02_fundamental",
+          "ch03_bank_core"
+        ]
+      },
+      {
+        "id": "ch05_stress",
+        "chapter": 5,
+        "title": "银行压力测试",
+        "operators": [
+          "bank_stress_test"
+        ],
+        "dependencies": [
+          "ch03_bank_core",
+          "ch04_valuation"
+        ]
+      },
+      {
+        "id": "ch06_forward_risk",
+        "chapter": 6,
+        "title": "前瞻风险评估",
+        "operators": [
+          "policy_risk",
+          "industry_position"
+        ],
+        "dependencies": [
+          "ch02_fundamental",
+          "ch04_valuation"
+        ]
+      },
+      {
+        "id": "ch07_market",
+        "chapter": 7,
+        "title": "市场环境与资金面",
+        "operators": [
+          "market_sentiment",
+          "news_signal"
+        ],
+        "dependencies": [
+          "ch01_screening"
+        ]
+      },
+      {
+        "id": "ch08_decision",
+        "chapter": 8,
+        "title": "投资决策与持仓管理",
+        "operators": [
+          "apple_trading_model",
+          "valuation_repair",
+          "position_management"
+        ],
+        "dependencies": [
+          "ch04_valuation",
+          "ch05_stress",
+          "ch06_forward_risk",
+          "ch07_market"
+        ]
+      }
+    ],
+    "buy_threshold": 75,
+    "avoid_threshold": 29,
+    "operators_dir": "operators/v2"
+  },
+  {
+    "name": "income_focus",
+    "display_name": "收息型分析",
+    "version": "2.0",
+    "analyst_role": "专注高股息收息策略的投资分析师，核心职责是判断股息是否可持续",
+    "chapters": [
+      {
+        "id": "ch01_screening",
+        "chapter": 1,
+        "title": "数据核查与收息资格",
+        "operators": [
+          "data_source_grading",
+          "quick_screen_5min",
+          "soe_identification"
+        ],
+        "dependencies": []
+      },
+      {
+        "id": "ch02_cashflow",
+        "chapter": 2,
+        "title": "盈利质量与现金流分析",
+        "operators": [
+          "cash_trend_5y",
+          "owner_earnings",
+          "performance_restoration",
+          "debt_structure"
+        ],
+        "dependencies": [
+          "ch01_screening"
+        ]
+      },
+      {
+        "id": "ch03_dividend",
+        "chapter": 3,
+        "title": "股息可持续性深度分析",
+        "operators": [
+          "valuation_dividend",
+          "stress_test"
+        ],
+        "dependencies": [
+          "ch02_cashflow"
+        ]
+      },
+      {
+        "id": "ch04_risk",
+        "chapter": 4,
+        "title": "前瞻风险与政策影响",
+        "operators": [
+          "policy_risk",
+          "industry_position",
+          "news_signal"
+        ],
+        "dependencies": [
+          "ch01_screening",
+          "ch02_cashflow"
+        ]
+      },
+      {
+        "id": "ch05_decision",
+        "chapter": 5,
+        "title": "估值与收息决策",
+        "operators": [
+          "safety_margin",
+          "apple_trading_model",
+          "position_management"
+        ],
+        "dependencies": [
+          "ch02_cashflow",
+          "ch03_dividend",
+          "ch04_risk"
+        ]
+      }
+    ],
+    "buy_threshold": 75,
+    "avoid_threshold": 29,
+    "operators_dir": "operators/v2"
+  },
+  {
+    "name": "my_test1",
+    "display_name": "测试1",
+    "version": "1.0",
+    "analyst_role": "投资分析师",
+    "chapters": [
+      {
+        "id": "ch01_new",
+        "chapter": 1,
+        "title": "数据验证与背景识别",
+        "operators": [
+          "data_source_grading",
+          "geopolitical_exclusion",
+          "soe_identification"
+        ],
+        "dependencies": [
+          "ch02_new"
+        ]
+      },
+      {
+        "id": "ch02_new",
+        "chapter": 2,
+        "title": "业绩确认",
+        "operators": [
+          "cash_trend_5y",
+          "debt_structure",
+          "industry_position"
+        ],
+        "dependencies": [
+          "ch01_new"
+        ]
+      }
+    ],
+    "buy_threshold": 70,
+    "avoid_threshold": 29,
+    "operators_dir": "operators/v2"
+  },
+  {
+    "name": "quick_scan",
+    "display_name": "快速评估",
+    "version": "2.0",
+    "analyst_role": "高效的投资分析师，快速识别机会和风险，宁可漏掉好股票也不放过坏股票",
+    "chapters": [
+      {
+        "id": "ch01_overview",
+        "chapter": 1,
+        "title": "公司概况与数据核查",
+        "operators": [
+          "data_source_grading",
+          "quick_screen_5min",
+          "soe_identification",
+          "stream_classification",
+          "debt_structure"
+        ],
+        "dependencies": []
+      },
+      {
+        "id": "ch02_quality",
+        "chapter": 2,
+        "title": "盈利质量与现金流",
+        "operators": [
+          "cash_trend_5y",
+          "owner_earnings",
+          "pe_trap_detection"
+        ],
+        "dependencies": [
+          "ch01_overview"
+        ]
+      },
+      {
+        "id": "ch03_valuation",
+        "chapter": 3,
+        "title": "估值判断与投资建议",
+        "operators": [
+          "safety_margin",
+          "valuation_dividend",
+          "valuation_fcf"
+        ],
+        "dependencies": [
+          "ch01_overview",
+          "ch02_quality"
+        ]
+      }
+    ],
+    "buy_threshold": 80,
+    "avoid_threshold": 39,
+    "operators_dir": "operators/v2"
+  },
+  {
+    "name": "v6_enhanced",
+    "display_name": "V6 增强分析",
+    "version": "6.2",
+    "analyst_role": "严谨的投资分析师，排雷优先于选股",
+    "chapters": [
+      {
+        "id": "ch01_screening",
+        "chapter": 1,
+        "title": "数据核查与快速筛选",
+        "operators": [
+          "data_source_grading",
+          "geopolitical_exclusion",
+          "quick_screen_5min"
+        ],
+        "dependencies": []
+      },
+      {
+        "id": "ch02_fundamental",
+        "chapter": 2,
+        "title": "基本面分析",
+        "operators": [
+          "soe_identification",
+          "stream_classification",
+          "debt_structure",
+          "cycle_analysis",
+          "management_integrity"
+        ],
+        "dependencies": [
+          "ch01_screening"
+        ]
+      },
+      {
+        "id": "ch03_cashflow",
+        "chapter": 3,
+        "title": "现金流与盈利质量",
+        "operators": [
+          "cash_trend_5y",
+          "performance_restoration",
+          "owner_earnings"
+        ],
+        "dependencies": [
+          "ch01_screening",
+          "ch02_fundamental"
+        ]
+      },
+      {
+        "id": "ch04_valuation",
+        "chapter": 4,
+        "title": "估值与安全边际",
+        "operators": [
+          "pe_trap_detection",
+          "valuation_fcf",
+          "valuation_dividend",
+          "safety_margin"
+        ],
+        "dependencies": [
+          "ch02_fundamental",
+          "ch03_cashflow"
+        ]
+      },
+      {
+        "id": "ch05_stress",
+        "chapter": 5,
+        "title": "压力测试与特殊分析",
+        "operators": [
+          "stress_test",
+          "cigar_butt",
+          "light_asset_model"
+        ],
+        "dependencies": [
+          "ch03_cashflow",
+          "ch04_valuation"
+        ]
+      },
+      {
+        "id": "ch06_forward_risk",
+        "chapter": 6,
+        "title": "前瞻风险评估",
+        "operators": [
+          "policy_risk",
+          "ai_disruption",
+          "industry_position"
+        ],
+        "dependencies": [
+          "ch02_fundamental",
+          "ch04_valuation"
+        ]
+      },
+      {
+        "id": "ch07_market",
+        "chapter": 7,
+        "title": "市场环境与资金面",
+        "operators": [
+          "market_sentiment",
+          "news_signal"
+        ],
+        "dependencies": [
+          "ch01_screening"
+        ]
+      },
+      {
+        "id": "ch08_decision",
+        "chapter": 8,
+        "title": "投资决策与持仓管理",
+        "operators": [
+          "apple_trading_model",
+          "valuation_repair",
+          "position_management"
+        ],
+        "dependencies": [
+          "ch04_valuation",
+          "ch05_stress",
+          "ch06_forward_risk",
+          "ch07_market"
+        ]
+      }
+    ],
+    "buy_threshold": 75,
+    "avoid_threshold": 29,
+    "operators_dir": "operators/v2",
+    "backtest": {
+      "start_date": "2020-06-30",
+      "end_date": "2025-12-31",
+      "interval": "6m"
+    }
+  },
+  {
+    "name": "v6_value",
+    "display_name": "V6 价值投资分析",
+    "version": "6.0",
+    "analyst_role": "严谨的价值投资分析师",
+    "chapters": [
+      {
+        "id": "ch01_screening",
+        "chapter": 1,
+        "title": "数据核查与快速筛选",
+        "operators": [
+          "data_source_grading",
+          "geopolitical_exclusion",
+          "quick_screen_5min"
+        ],
+        "dependencies": []
+      },
+      {
+        "id": "ch02_fundamental",
+        "chapter": 2,
+        "title": "基本面分析",
+        "operators": [
+          "soe_identification",
+          "stream_classification",
+          "debt_structure",
+          "cycle_analysis",
+          "management_integrity"
+        ],
+        "dependencies": [
+          "ch01_screening"
+        ]
+      },
+      {
+        "id": "ch03_cashflow",
+        "chapter": 3,
+        "title": "现金流与盈利质量",
+        "operators": [
+          "cash_trend_5y",
+          "performance_restoration",
+          "owner_earnings"
+        ],
+        "dependencies": [
+          "ch01_screening",
+          "ch02_fundamental"
+        ]
+      },
+      {
+        "id": "ch04_valuation",
+        "chapter": 4,
+        "title": "估值与安全边际",
+        "operators": [
+          "pe_trap_detection",
+          "valuation_fcf",
+          "valuation_dividend",
+          "safety_margin"
+        ],
+        "dependencies": [
+          "ch02_fundamental",
+          "ch03_cashflow"
+        ]
+      },
+      {
+        "id": "ch05_stress",
+        "chapter": 5,
+        "title": "压力测试与特殊分析",
+        "operators": [
+          "stress_test",
+          "cigar_butt",
+          "light_asset_model"
+        ],
+        "dependencies": [
+          "ch03_cashflow",
+          "ch04_valuation"
+        ]
+      },
+      {
+        "id": "ch06_decision",
+        "chapter": 6,
+        "title": "投资决策与持仓管理",
+        "operators": [
+          "apple_trading_model",
+          "valuation_repair",
+          "position_management"
+        ],
+        "dependencies": [
+          "ch04_valuation",
+          "ch05_stress"
+        ]
+      }
+    ],
+    "buy_threshold": 70,
+    "avoid_threshold": 29,
+    "operators_dir": "operators/v1",
+    "backtest": {
+      "start_date": "2020-06-30",
+      "end_date": "2025-12-31",
+      "interval": "6m"
+    }
+  }
+]

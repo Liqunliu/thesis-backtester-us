@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>thesis-backtester - 把定性投资判断变成可回测对象</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ======== Header ======== -->
+<header class="site-header">
+  <h1>thesis-backtester</h1>
+  <p class="tagline">把定性投资判断变成可回测对象</p>
+  <a class="gh-link" href="https://github.com/geniucker-dev/thesis-backtester" target="_blank" rel="noopener">
+    <svg class="gh-icon" viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+    GitHub
+  </a>
+</header>
+
+<!-- ======== Tab Bar ======== -->
+<nav class="tab-bar">
+  <button class="tab-btn active" data-tab="tab-operators">算子库</button>
+  <button class="tab-btn" data-tab="tab-strategies">分析框架</button>
+  <button class="tab-btn" data-tab="tab-backtest">回测成果</button>
+  <button class="tab-btn" data-tab="tab-contribute">参与贡献</button>
+</nav>
+
+<!-- ======== Tab: 算子库 ======== -->
+<section id="tab-operators" class="tab-panel active">
+  <p style="padding:2rem;color:var(--text-muted);">Loading...</p>
+</section>
+
+<!-- ======== Tab: 分析框架 ======== -->
+<section id="tab-strategies" class="tab-panel">
+  <p style="padding:2rem;color:var(--text-muted);">Loading...</p>
+</section>
+
+<!-- ======== Tab: 回测成果 ======== -->
+<section id="tab-backtest" class="tab-panel">
+  <h2 style="margin-bottom:1rem;">V6 价值投资策略回测结果</h2>
+  <p style="margin-bottom:1.5rem;color:var(--text-muted);">
+    基于 2020-2025 年 A 股数据，12 个半年截面，120+ 只候选股票的全量回测。Agent 使用 DeepSeek-Chat 模型进行盲测分析。
+  </p>
+
+  <!-- Key Stats -->
+  <div class="results-grid">
+    <div class="stat-card">
+      <div class="stat-value positive">+7.1pp</div>
+      <div class="stat-label">Agent Buy vs 筛选池 Alpha<br>(6个月前向收益)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">120+</div>
+      <div class="stat-label">分析股票数</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">12</div>
+      <div class="stat-label">截面数 (2020-2025)</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value positive">73%</div>
+      <div class="stat-label">回避信号准确率</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-value">26</div>
+      <div class="stat-label">V2 算子数</div>
+    </div>
+  </div>
+
+  <!-- Baseline comparison -->
+  <h3 style="margin-bottom:0.75rem;">五基准对比 (6个月前向收益均值)</h3>
+  <table class="baseline-table">
+    <thead>
+      <tr>
+        <th>基准</th>
+        <th>策略说明</th>
+        <th>6M 平均收益</th>
+        <th>相对筛选池</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>沪深300 (market)</td>
+        <td>全市场基准指数</td>
+        <td>+0.9%</td>
+        <td>-</td>
+      </tr>
+      <tr>
+        <td>筛选池 (screen_all)</td>
+        <td>通过量化筛选的全部候选股等权</td>
+        <td>+4.0%</td>
+        <td>基准线</td>
+      </tr>
+      <tr>
+        <td>最高评级 (screen_top)</td>
+        <td>筛选评分最高一级 (金龟) 等权</td>
+        <td>+5.2%</td>
+        <td>+1.2pp</td>
+      </tr>
+      <tr class="highlight">
+        <td><strong>Agent Buy</strong></td>
+        <td>Agent 综合评分 &ge; 70 分的股票等权</td>
+        <td><strong>+8.1%</strong></td>
+        <td><strong>+4.1pp</strong></td>
+      </tr>
+      <tr class="highlight">
+        <td><strong>Agent Top5</strong></td>
+        <td>Agent 评分前 5 等权</td>
+        <td><strong>+11.1%</strong></td>
+        <td><strong>+7.1pp</strong></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin-bottom:0.75rem;">信号价值分析</h3>
+  <table class="baseline-table">
+    <thead>
+      <tr>
+        <th>信号类型</th>
+        <th>描述</th>
+        <th>Alpha 贡献</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>买入信号 (Score &ge; 70)</td>
+        <td>Agent 认为值得买入的股票</td>
+        <td class="positive">+6.4pp</td>
+      </tr>
+      <tr>
+        <td>回避信号 (Score &le; 29)</td>
+        <td>Agent 认为应回避的股票</td>
+        <td class="positive">-14.8pp (避损)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="contribute-section" style="margin-top:1.5rem;">
+    <h3>关键发现</h3>
+    <ul>
+      <li><strong>排雷价值 > 选股价值</strong>：回避信号的 alpha 贡献 (-14.8pp) 远超买入信号 (+6.4pp)，验证了"宁可错过，不可错买"的设计理念</li>
+      <li><strong>Agent 评分有区分度</strong>：评分越高，前向收益越好，呈现单调递增关系</li>
+      <li><strong>深度分析优于简单筛选</strong>：Agent Buy vs Screen All 有稳定的超额收益</li>
+      <li><strong>V2 增强版</strong>提升买入阈值到 75 分后，Sharpe Ratio 从 0.36 提升到 0.62</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ======== Tab: 参与贡献 ======== -->
+<section id="tab-contribute" class="tab-panel">
+
+  <!-- How to write an operator -->
+  <div class="contribute-section">
+    <h3>如何编写算子 (Operator)</h3>
+    <p>算子是分析的最小单元，定义在 <code>operators/v2/</code> 目录下的 Markdown 文件中。每个算子包含 YAML 前置元数据和 Markdown 分析指引。</p>
+
+    <h4>文件格式</h4>
+    <div class="code-block">
+<span class="punct">---</span>
+<span class="key">id</span><span class="punct">:</span> <span class="string">my_operator</span>
+<span class="key">name</span><span class="punct">:</span> <span class="string">我的分析算子</span>
+<span class="key">category</span><span class="punct">:</span> <span class="string">fundamental</span>
+<span class="key">tags</span><span class="punct">:</span> <span class="string">[analysis, my_tag]</span>
+<span class="key">data_needed</span><span class="punct">:</span> <span class="string">[balancesheet, income, cashflow]</span>
+<span class="key">outputs</span><span class="punct">:</span>
+  <span class="punct">-</span> <span class="key">field</span><span class="punct">:</span> <span class="string">my_result</span>
+    <span class="key">type</span><span class="punct">:</span> <span class="string">str</span>
+    <span class="key">desc</span><span class="punct">:</span> <span class="string">"分析结论"</span>
+  <span class="punct">-</span> <span class="key">field</span><span class="punct">:</span> <span class="string">my_score</span>
+    <span class="key">type</span><span class="punct">:</span> <span class="string">float</span>
+    <span class="key">desc</span><span class="punct">:</span> <span class="string">"评估分数 (0-100)"</span>
+<span class="punct">---</span>
+
+<span class="comment">## 算子标题</span>
+
+<span class="comment">### 目的</span>
+<span>说明这个算子要回答什么问题...</span>
+
+<span class="comment">### 分析步骤</span>
+<span>具体的分析指引，Agent 会按照这些步骤执行分析...</span>
+    </div>
+
+    <h4>关键字段说明</h4>
+    <ul>
+      <li><strong>id</strong>: 唯一标识符，在 strategy.yaml 中引用</li>
+      <li><strong>category</strong>: 分类 (screening / fundamental / valuation / decision / forward_risk / special)</li>
+      <li><strong>data_needed</strong>: 需要的数据表 (balancesheet, income, cashflow, fina_indicator, price_history, dividend, news 等)</li>
+      <li><strong>outputs</strong>: 输出字段定义，Engine 会自动生成 JSON Schema</li>
+      <li><strong>gate</strong> (可选): 行业限制，如 <code>gate: {only_industry: [银行]}</code></li>
+    </ul>
+  </div>
+
+  <!-- How to create a strategy -->
+  <div class="contribute-section">
+    <h3>如何创建策略 (Strategy)</h3>
+    <p>策略是算子的编排方案，定义在 <code>strategies/&lt;name&gt;/strategy.yaml</code> 中。</p>
+
+    <h4>基本结构</h4>
+    <div class="code-block">
+<span class="key">meta</span><span class="punct">:</span>
+  <span class="key">name</span><span class="punct">:</span> <span class="string">我的策略</span>
+  <span class="key">version</span><span class="punct">:</span> <span class="string">"1.0"</span>
+
+<span class="key">framework</span><span class="punct">:</span>
+  <span class="key">operators_dir</span><span class="punct">:</span> <span class="string">operators/v2</span>
+  <span class="key">analyst_role</span><span class="punct">:</span> <span class="string">投资分析师</span>
+
+  <span class="key">chapters</span><span class="punct">:</span>
+  <span class="punct">-</span> <span class="key">id</span><span class="punct">:</span> <span class="string">ch01_check</span>
+    <span class="key">chapter</span><span class="punct">:</span> <span class="string">1</span>
+    <span class="key">title</span><span class="punct">:</span> <span class="string">数据核查</span>
+    <span class="key">operators</span><span class="punct">:</span> <span class="string">[data_source_grading, quick_screen_5min]</span>
+    <span class="key">dependencies</span><span class="punct">:</span> <span class="string">[]</span>
+
+  <span class="punct">-</span> <span class="key">id</span><span class="punct">:</span> <span class="string">ch02_analysis</span>
+    <span class="key">chapter</span><span class="punct">:</span> <span class="string">2</span>
+    <span class="key">title</span><span class="punct">:</span> <span class="string">基本面分析</span>
+    <span class="key">operators</span><span class="punct">:</span> <span class="string">[debt_structure, cash_trend_5y]</span>
+    <span class="key">dependencies</span><span class="punct">:</span> <span class="string">[ch01_check]</span>
+
+  <span class="key">synthesis</span><span class="punct">:</span>
+    <span class="key">thinking_steps</span><span class="punct">:</span>
+      <span class="punct">-</span> <span class="key">step</span><span class="punct">:</span> <span class="string">评分与决策</span>
+        <span class="key">instruction</span><span class="punct">:</span> <span class="string">综合分析给出评分...</span>
+    <span class="key">decision_thresholds</span><span class="punct">:</span>
+      <span class="key">buy</span><span class="punct">:</span> <span class="string">75</span>
+      <span class="key">avoid</span><span class="punct">:</span> <span class="string">29</span>
+    </div>
+
+    <h4>设计要点</h4>
+    <ul>
+      <li>章节间通过 <strong>dependencies</strong> 形成 DAG，后续章节可看到前序章节结论</li>
+      <li><strong>synthesis</strong> 定义综合研判的思考路径和评分锚点</li>
+      <li>可从现有策略 (v6_value, v6_enhanced) 复制并修改</li>
+      <li>支持行业专用策略 (如 bank_analysis)，替换通用算子为行业专用算子</li>
+    </ul>
+  </div>
+
+  <!-- How to submit PR -->
+  <div class="contribute-section">
+    <h3>如何提交贡献</h3>
+    <ol>
+      <li>Fork 仓库到你的 GitHub 账号</li>
+      <li>创建特性分支: <code>git checkout -b feature/my-operator</code></li>
+      <li>添加或修改算子/策略文件</li>
+      <li>本地测试:
+        <div class="code-block"><span class="comment"># 测试算子能否被正确加载</span>
+python -m src.engine.launcher strategies/v6_enhanced/strategy.yaml agent-analyze 601288.SH 2024-06-30
+
+<span class="comment"># 重新生成站点数据</span>
+python docs/site/build.py</div>
+      </li>
+      <li>提交 PR，说明变更内容和测试结果</li>
+    </ol>
+
+    <h4>贡献方向</h4>
+    <ul>
+      <li>新行业专用算子 (地产、医药、新能源 ...)</li>
+      <li>新分析维度 (ESG、技术面、量价关系 ...)</li>
+      <li>策略优化 (调整阈值、改进 synthesis 思考步骤)</li>
+      <li>国际化 (港股、美股适配)</li>
+    </ul>
+  </div>
+
+  <div class="contribute-section">
+    <h3>项目链接</h3>
+    <ul>
+      <li>GitHub: <a href="https://github.com/geniucker-dev/thesis-backtester" target="_blank">github.com/geniucker-dev/thesis-backtester</a></li>
+      <li>License: AGPL-3.0</li>
+    </ul>
+  </div>
+</section>
+
+<!-- ======== Footer ======== -->
+<footer class="site-footer">
+  <p>thesis-backtester &mdash; 把定性投资判断变成可回测对象</p>
+  <p>Licensed under <a href="https://www.gnu.org/licenses/agpl-3.0.html" target="_blank">AGPL-3.0</a></p>
+</footer>
+
+<script src="js/app.js"></script>
+</body>
+</html>

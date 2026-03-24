@@ -1,0 +1,1622 @@
+{
+  "total": 37,
+  "categories": {
+    "bank": [
+      {
+        "id": "bank_asset_quality",
+        "name": "资产质量与不良率分析",
+        "category": "fundamental",
+        "dir_category": "bank",
+        "tags": [
+          "bank",
+          "asset_quality",
+          "npl",
+          "risk"
+        ],
+        "data_needed": [
+          "balancesheet",
+          "income",
+          "fina_indicator"
+        ],
+        "outputs": [
+          {
+            "field": "npl_ratio",
+            "type": "float",
+            "desc": "不良贷款率（%）"
+          },
+          {
+            "field": "provision_coverage",
+            "type": "float",
+            "desc": "拨备覆盖率（%）"
+          },
+          {
+            "field": "npl_trend",
+            "type": "str",
+            "desc": "不良率趋势（改善/稳定/恶化）"
+          },
+          {
+            "field": "credit_cost",
+            "type": "float",
+            "desc": "信用成本（%）"
+          },
+          {
+            "field": "asset_quality_verdict",
+            "type": "str",
+            "desc": "资产质量综合评价"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "银行"
+          ]
+        }
+      },
+      {
+        "id": "bank_nim",
+        "name": "净息差与盈利能力",
+        "category": "fundamental",
+        "dir_category": "bank",
+        "tags": [
+          "bank",
+          "nim",
+          "profitability"
+        ],
+        "data_needed": [
+          "income",
+          "fina_indicator"
+        ],
+        "outputs": [
+          {
+            "field": "nim_current",
+            "type": "float",
+            "desc": "当前净息差（%）"
+          },
+          {
+            "field": "nim_trend",
+            "type": "str",
+            "desc": "净息差趋势（收窄/稳定/扩大）"
+          },
+          {
+            "field": "fee_income_ratio",
+            "type": "float",
+            "desc": "非息收入占比（%）"
+          },
+          {
+            "field": "cost_income_ratio",
+            "type": "float",
+            "desc": "成本收入比（%）"
+          },
+          {
+            "field": "profitability_verdict",
+            "type": "str",
+            "desc": "盈利能力综合评价"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "银行"
+          ]
+        }
+      },
+      {
+        "id": "bank_stress_test",
+        "name": "银行压力测试",
+        "category": "decision",
+        "dir_category": "bank",
+        "tags": [
+          "bank",
+          "stress_test",
+          "capital",
+          "risk"
+        ],
+        "data_needed": [
+          "balancesheet",
+          "income",
+          "fina_indicator"
+        ],
+        "outputs": [
+          {
+            "field": "capital_adequacy",
+            "type": "float",
+            "desc": "资本充足率（%）"
+          },
+          {
+            "field": "tier1_ratio",
+            "type": "float",
+            "desc": "核心一级资本充足率（%）"
+          },
+          {
+            "field": "stress_npl_impact",
+            "type": "str",
+            "desc": "不良率上升100bp/200bp对资本的冲击评估"
+          },
+          {
+            "field": "dividend_sustainability",
+            "type": "str",
+            "desc": "压力情景下分红可持续性（可持续/需削减/不可持续）"
+          },
+          {
+            "field": "stress_verdict",
+            "type": "str",
+            "desc": "压力测试综合结论"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "银行"
+          ]
+        }
+      },
+      {
+        "id": "pb_roe_valuation",
+        "name": "PB-ROE 估值模型",
+        "category": "valuation",
+        "dir_category": "bank",
+        "tags": [
+          "valuation",
+          "bank",
+          "pb",
+          "roe"
+        ],
+        "data_needed": [
+          "price_history",
+          "fina_indicator",
+          "balancesheet"
+        ],
+        "outputs": [
+          {
+            "field": "pb_current",
+            "type": "float",
+            "desc": "当前PB倍数"
+          },
+          {
+            "field": "roe_ttm",
+            "type": "float",
+            "desc": "TTM ROE（%）"
+          },
+          {
+            "field": "pb_roe_assessment",
+            "type": "str",
+            "desc": "PB-ROE匹配度评估（低估/合理/高估）"
+          },
+          {
+            "field": "implied_roe",
+            "type": "float",
+            "desc": "当前PB隐含的ROE要求（%）"
+          },
+          {
+            "field": "target_pb",
+            "type": "float",
+            "desc": "基于ROE推算的合理PB"
+          },
+          {
+            "field": "valuation_verdict",
+            "type": "str",
+            "desc": "估值综合结论"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "银行"
+          ]
+        }
+      }
+    ],
+    "consumer": [
+      {
+        "id": "consumer_brand_moat",
+        "name": "品牌护城河分析",
+        "category": "fundamental",
+        "dir_category": "consumer",
+        "tags": [
+          "consumer",
+          "brand",
+          "moat",
+          "pricing_power"
+        ],
+        "data_needed": [
+          "income",
+          "fina_indicator",
+          "fina_mainbz"
+        ],
+        "outputs": [
+          {
+            "field": "gross_margin_trend",
+            "type": "str",
+            "desc": "5年毛利率趋势描述"
+          },
+          {
+            "field": "pricing_power",
+            "type": "enum [强/中/弱]",
+            "desc": "提价能力评估"
+          },
+          {
+            "field": "brand_strength",
+            "type": "str",
+            "desc": "品牌实力综合评估"
+          },
+          {
+            "field": "market_share_stability",
+            "type": "str",
+            "desc": "市场份额稳定性判断"
+          },
+          {
+            "field": "moat_verdict",
+            "type": "str",
+            "desc": "护城河综合结论"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "食品饮料",
+            "家电",
+            "医药"
+          ]
+        }
+      },
+      {
+        "id": "consumer_growth",
+        "name": "消费增长持续性",
+        "category": "fundamental",
+        "dir_category": "consumer",
+        "tags": [
+          "consumer",
+          "growth",
+          "sustainability",
+          "reinvestment"
+        ],
+        "data_needed": [
+          "income",
+          "fina_indicator",
+          "cashflow"
+        ],
+        "outputs": [
+          {
+            "field": "revenue_cagr_3y",
+            "type": "float",
+            "desc": "3年营业收入复合增长率(%)"
+          },
+          {
+            "field": "organic_growth",
+            "type": "str",
+            "desc": "有机增长vs并购增长判断"
+          },
+          {
+            "field": "growth_quality",
+            "type": "str",
+            "desc": "增长质量评估（利润增速是否跑赢收入增速）"
+          },
+          {
+            "field": "reinvestment_rate",
+            "type": "float",
+            "desc": "再投资率(%)"
+          },
+          {
+            "field": "growth_sustainability",
+            "type": "str",
+            "desc": "增长持续性综合判断"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "食品饮料",
+            "家电",
+            "医药"
+          ]
+        }
+      }
+    ],
+    "decision": [
+      {
+        "id": "apple_trading_model",
+        "name": "苹果买卖估值修复模型",
+        "category": "decision",
+        "dir_category": "decision",
+        "tags": [
+          "decision",
+          "valuation",
+          "trading"
+        ],
+        "data_needed": [
+          "daily_indicators",
+          "price_history",
+          "cashflow",
+          "income"
+        ],
+        "outputs": [
+          {
+            "field": "apple_normal_price",
+            "type": "float",
+            "desc": "苹果正常价(合理估值对应股价)"
+          },
+          {
+            "field": "apple_buy_price",
+            "type": "float",
+            "desc": "苹果买入价(安全边际充足的入场价)"
+          },
+          {
+            "field": "apple_sell_price",
+            "type": "float",
+            "desc": "苹果卖出价(估值修复完成的退场价)"
+          },
+          {
+            "field": "buy_logic_statement",
+            "type": "str",
+            "desc": "一句话买入逻辑(可证伪、可量化、有时限)"
+          }
+        ]
+      },
+      {
+        "id": "position_management",
+        "name": "持仓与仓位管理",
+        "category": "decision",
+        "dir_category": "decision",
+        "tags": [
+          "decision",
+          "portfolio",
+          "position"
+        ],
+        "data_needed": [
+          "daily_indicators",
+          "cashflow",
+          "dividend"
+        ],
+        "outputs": [
+          {
+            "field": "recommendation",
+            "type": "str",
+            "desc": "投资建议(买入/持有/减仓/清仓/观察)"
+          },
+          {
+            "field": "position_type",
+            "type": "str",
+            "desc": "仓位类型(核心/卫星/观察)"
+          },
+          {
+            "field": "suggested_position_pct",
+            "type": "float",
+            "desc": "建议仓位百分比"
+          },
+          {
+            "field": "exit_conditions",
+            "type": "list",
+            "desc": "退出条件列表"
+          },
+          {
+            "field": "macro_event_impact",
+            "type": "str",
+            "desc": "宏观事件影响评估(无影响/短期压制/需警惕/止损)"
+          }
+        ]
+      },
+      {
+        "id": "stress_test",
+        "name": "极端情景压力测试",
+        "category": "decision",
+        "dir_category": "decision",
+        "tags": [
+          "decision",
+          "risk",
+          "stress"
+        ],
+        "data_needed": [
+          "income",
+          "cashflow",
+          "dividend",
+          "balancesheet"
+        ],
+        "outputs": [
+          {
+            "field": "revenue_after_3y_decline",
+            "type": "float",
+            "desc": "三年连续衰退10%后的净利润(亿元)"
+          },
+          {
+            "field": "still_profitable",
+            "type": "bool",
+            "desc": "压力下是否仍盈利"
+          },
+          {
+            "field": "dividend_sustainable_under_stress",
+            "type": "bool",
+            "desc": "极端情景下分红是否可持续"
+          },
+          {
+            "field": "stress_test_result",
+            "type": "str",
+            "desc": "通过/勉强通过/不通过"
+          }
+        ]
+      }
+    ],
+    "forward_risk": [
+      {
+        "id": "ai_disruption",
+        "name": "AI/大模型冲击风险评估",
+        "category": "forward_risk",
+        "dir_category": "forward_risk",
+        "tags": [
+          "risk",
+          "forward_looking"
+        ],
+        "data_needed": [
+          "income",
+          "fina_mainbz",
+          "balancesheet"
+        ],
+        "outputs": [
+          {
+            "field": "disruption_level",
+            "type": "enum [高危, 中等, 低, 受益]"
+          },
+          {
+            "field": "revenue_at_risk_pct",
+            "type": "number",
+            "desc": "受 AI 冲击的收入占总收入百分比"
+          },
+          {
+            "field": "disruption_timeline",
+            "type": "enum [已在发生, 1-2年内, 3-5年内, 暂不明确]"
+          },
+          {
+            "field": "transfer_capability",
+            "type": "enum [无AI活动, 内部AI研发, AI增强产品已部署, AI为核心战略]"
+          },
+          {
+            "field": "ai_opportunity",
+            "type": "text",
+            "desc": "AI 带来的机会（如有）"
+          },
+          {
+            "field": "second_order_risk",
+            "type": "text",
+            "desc": "下游行业被AI改变导致的间接需求萎缩风险"
+          }
+        ]
+      },
+      {
+        "id": "industry_position",
+        "name": "行业地位与竞争格局分析",
+        "category": "forward_risk",
+        "dir_category": "forward_risk",
+        "tags": [
+          "fundamental",
+          "forward_looking"
+        ],
+        "data_needed": [
+          "income",
+          "fina_indicator",
+          "fina_mainbz",
+          "balancesheet"
+        ],
+        "outputs": [
+          {
+            "field": "market_position",
+            "type": "enum [龙头, 第二梯队, 一般, 边缘化]"
+          },
+          {
+            "field": "competitive_moat",
+            "type": "enum [强, 中, 弱, 无]"
+          },
+          {
+            "field": "moat_type",
+            "type": "text",
+            "desc": "护城河类型（规模/品牌/牌照/网络效应/转换成本/资源垄断）"
+          },
+          {
+            "field": "moat_durability",
+            "type": "enum [加固中, 稳定, 侵蚀中, 不适用]",
+            "desc": "护城河趋势方向"
+          },
+          {
+            "field": "share_trend",
+            "type": "enum [抢占份额, 稳定, 流失份额]",
+            "desc": "市场份额变化趋势"
+          },
+          {
+            "field": "industry_trend",
+            "type": "enum [增长, 成熟, 衰退, 周期性]"
+          },
+          {
+            "field": "pricing_power",
+            "type": "enum [强, 中, 弱]",
+            "desc": "定价能力（能否主动提价且不丧失销量）"
+          },
+          {
+            "field": "five_forces_summary",
+            "type": "text",
+            "desc": "波特五力综合评级与关键结论"
+          }
+        ]
+      },
+      {
+        "id": "market_sentiment",
+        "name": "市场情绪与资金面分析",
+        "category": "forward_risk",
+        "dir_category": "forward_risk",
+        "tags": [
+          "risk",
+          "market"
+        ],
+        "data_needed": [
+          "price_history",
+          "fina_indicator"
+        ],
+        "outputs": [
+          {
+            "field": "sentiment_level",
+            "type": "enum [极度乐观, 偏乐观, 中性, 偏悲观, 极度悲观]"
+          },
+          {
+            "field": "fund_flow_trend",
+            "type": "enum [持续流入, 流入转流出, 中性, 流出转流入, 持续流出, 数据不可用]",
+            "desc": "近期主力资金流向趋势"
+          },
+          {
+            "field": "market_position",
+            "type": "text",
+            "desc": "大盘当前位置判断（上升/震荡/下跌）"
+          },
+          {
+            "field": "margin_signal",
+            "type": "enum [看多, 中性, 看空, 数据不可用]",
+            "desc": "融资融券信号"
+          },
+          {
+            "field": "contrarian_flag",
+            "type": "boolean",
+            "desc": "是否触发逆向投资机会信号"
+          },
+          {
+            "field": "sector_divergence",
+            "type": "text",
+            "desc": "个股所属行业与大盘的情绪偏离描述"
+          }
+        ]
+      },
+      {
+        "id": "news_signal",
+        "name": "新闻与公告信号分析",
+        "category": "forward_risk",
+        "dir_category": "forward_risk",
+        "tags": [
+          "risk",
+          "forward_looking"
+        ],
+        "data_needed": [
+          "balancesheet",
+          "income",
+          "fina_audit"
+        ],
+        "outputs": [
+          {
+            "field": "news_sentiment",
+            "type": "enum [重大利好, 偏正面, 中性, 偏负面, 重大利空]"
+          },
+          {
+            "field": "key_events",
+            "type": "list",
+            "desc": "近期重要事件摘要（含发生日期和影响评估）"
+          },
+          {
+            "field": "risk_flags",
+            "type": "list",
+            "desc": "识别到的风险信号（ST/暴雷/诉讼/违规等）"
+          },
+          {
+            "field": "earnings_impact_pct",
+            "type": "number",
+            "desc": "重大事件对下一年盈利的预估影响百分比"
+          },
+          {
+            "field": "data_quality",
+            "type": "enum [新闻充足, 新闻有限, 无新闻数据-已降级]",
+            "desc": "新闻数据可用性标记"
+          }
+        ]
+      },
+      {
+        "id": "policy_risk",
+        "name": "政策转向风险评估",
+        "category": "forward_risk",
+        "dir_category": "forward_risk",
+        "tags": [
+          "risk",
+          "forward_looking"
+        ],
+        "data_needed": [
+          "income",
+          "fina_mainbz",
+          "balancesheet",
+          "fina_indicator",
+          "top10_holders",
+          "news"
+        ],
+        "outputs": [
+          {
+            "field": "policy_exposure",
+            "type": "enum [高, 中, 低]",
+            "desc": "业务对政策的依赖程度"
+          },
+          {
+            "field": "policy_direction",
+            "type": "enum [利好, 中性, 利空, 不确定]",
+            "desc": "当前政策方向"
+          },
+          {
+            "field": "strategic_alignment",
+            "type": "enum [核心战略, 支撑配套, 中性, 潜在打击对象]",
+            "desc": "与国家战略优先级的对齐程度"
+          },
+          {
+            "field": "subsidy_dependency_pct",
+            "type": "float",
+            "desc": "政府补助占净利润比例(%)"
+          },
+          {
+            "field": "gov_revenue_pct",
+            "type": "float",
+            "desc": "政府相关收入占总收入比例(%)"
+          },
+          {
+            "field": "worst_case_earnings_impact_pct",
+            "type": "float",
+            "desc": "极端政策冲击下预估盈利影响(%)"
+          },
+          {
+            "field": "policy_resilience",
+            "type": "enum [强, 中, 弱]",
+            "desc": "政策冲击抵御能力"
+          },
+          {
+            "field": "key_policies",
+            "type": "list",
+            "desc": "影响该公司的关键政策清单"
+          }
+        ]
+      }
+    ],
+    "fundamental": [
+      {
+        "id": "cash_trend_5y",
+        "name": "5年现金趋势分析",
+        "category": "fundamental",
+        "dir_category": "fundamental",
+        "tags": [
+          "fundamental",
+          "cashflow",
+          "trend"
+        ],
+        "data_needed": [
+          "cashflow",
+          "balancesheet",
+          "income"
+        ],
+        "outputs": [
+          {
+            "field": "cash_trend_5y",
+            "type": "str",
+            "desc": "持续增长/波动稳定/下降/急剧下降"
+          },
+          {
+            "field": "latest_cash_balance",
+            "type": "float",
+            "desc": "最新广义现金余额（亿）"
+          },
+          {
+            "field": "fcf_trend",
+            "type": "str",
+            "desc": "自由现金流趋势：正且增长/正但下降/转负/持续为负"
+          },
+          {
+            "field": "cash_to_profit_ratio",
+            "type": "float",
+            "desc": "经营现金流/净利润 比率（>1 说明利润含金量高）"
+          },
+          {
+            "field": "cash_trend_signal",
+            "type": "str",
+            "desc": "趋势信号：改善/稳定/恶化/拐点"
+          }
+        ],
+        "gate": {
+          "exclude_industry": [
+            "银行",
+            "保险",
+            "证券",
+            "多元金融"
+          ]
+        }
+      },
+      {
+        "id": "cycle_analysis",
+        "name": "周期位置与拐点分析",
+        "category": "fundamental",
+        "dir_category": "fundamental",
+        "tags": [
+          "fundamental",
+          "cycle",
+          "debt"
+        ],
+        "data_needed": [
+          "income",
+          "balancesheet",
+          "cashflow",
+          "daily_indicators",
+          "fina_indicator"
+        ],
+        "outputs": [
+          {
+            "field": "is_cyclical",
+            "type": "bool",
+            "desc": "是否为周期性行业"
+          },
+          {
+            "field": "cycle_position",
+            "type": "str",
+            "desc": "顶部/下行/底部/上行/非周期"
+          },
+          {
+            "field": "cycle_debt_tolerance",
+            "type": "str",
+            "desc": "当前周期位置的负债容忍度：高/中/低/不适用"
+          },
+          {
+            "field": "reversal_signal",
+            "type": "str",
+            "desc": "拐点信号：无/可能见底/可能见顶/不确定"
+          },
+          {
+            "field": "cycle_reasoning",
+            "type": "str",
+            "desc": "周期判断的关键依据"
+          }
+        ]
+      },
+      {
+        "id": "debt_structure",
+        "name": "负债结构拆解",
+        "category": "fundamental",
+        "dir_category": "fundamental",
+        "tags": [
+          "fundamental",
+          "debt",
+          "balance_sheet"
+        ],
+        "data_needed": [
+          "balancesheet",
+          "income"
+        ],
+        "outputs": [
+          {
+            "field": "interest_bearing_debt",
+            "type": "float",
+            "desc": "有息负债总额（亿）"
+          },
+          {
+            "field": "zero_interest_debt",
+            "type": "bool",
+            "desc": "是否无有息负债"
+          },
+          {
+            "field": "debt_structure_assessment",
+            "type": "str",
+            "desc": "健康/可接受/警惕/危险"
+          }
+        ],
+        "gate": {
+          "exclude_industry": [
+            "银行",
+            "保险",
+            "证券",
+            "多元金融"
+          ]
+        }
+      },
+      {
+        "id": "management_integrity",
+        "name": "管理人诚信评估",
+        "category": "fundamental",
+        "dir_category": "fundamental",
+        "tags": [
+          "governance",
+          "risk",
+          "management"
+        ],
+        "data_needed": [
+          "balancesheet",
+          "income",
+          "cashflow",
+          "top10_holders",
+          "dividend",
+          "fina_indicator",
+          "fina_audit",
+          "pledge_stat",
+          "stk_holdertrade"
+        ],
+        "outputs": [
+          {
+            "field": "management_integrity",
+            "type": "str",
+            "desc": "可信/存疑/不可信"
+          },
+          {
+            "field": "integrity_red_flags",
+            "type": "list",
+            "desc": "诚信红旗信号列表"
+          }
+        ]
+      },
+      {
+        "id": "performance_restoration",
+        "name": "业绩还原与投资视角分离框架",
+        "category": "fundamental",
+        "dir_category": "fundamental",
+        "tags": [
+          "fundamental",
+          "valuation",
+          "cashflow",
+          "earnings_quality"
+        ],
+        "data_needed": [
+          "income",
+          "cashflow",
+          "balancesheet"
+        ],
+        "outputs": [
+          {
+            "field": "reported_profit",
+            "type": "float",
+            "desc": "报表净利润（亿）"
+          },
+          {
+            "field": "non_cash_adjustments",
+            "type": "float",
+            "desc": "非现金项目还原金额（亿）"
+          },
+          {
+            "field": "adjusted_profit",
+            "type": "float",
+            "desc": "还原后实际经营利润（亿）"
+          }
+        ]
+      },
+      {
+        "id": "stream_classification",
+        "name": "投资流派分类",
+        "category": "fundamental",
+        "dir_category": "fundamental",
+        "tags": [
+          "classification",
+          "strategy",
+          "valuation"
+        ],
+        "data_needed": [
+          "daily_indicators",
+          "cashflow",
+          "balancesheet",
+          "income"
+        ],
+        "outputs": [
+          {
+            "field": "investment_stream",
+            "type": "str",
+            "desc": "纯硬收息/价值发现/质量成长(GARP)/烟蒂股/关联方资源"
+          },
+          {
+            "field": "stream_reasoning",
+            "type": "str",
+            "desc": "流派归属的关键判据与推理过程"
+          }
+        ]
+      }
+    ],
+    "manufacturing": [
+      {
+        "id": "capacity_cycle",
+        "name": "产能周期分析",
+        "category": "manufacturing",
+        "dir_category": "manufacturing",
+        "tags": [
+          "cycle",
+          "capex",
+          "manufacturing",
+          "capacity"
+        ],
+        "data_needed": [
+          "income",
+          "cashflow",
+          "balancesheet",
+          "fina_indicator"
+        ],
+        "outputs": [
+          {
+            "field": "capex_to_depreciation",
+            "type": "float",
+            "desc": "CAPEX/折旧比率"
+          },
+          {
+            "field": "capacity_phase",
+            "type": "str",
+            "desc": "产能阶段（扩张/成熟/收缩/出清）"
+          },
+          {
+            "field": "utilization_estimate",
+            "type": "str",
+            "desc": "产能利用率估计（高/中/低）"
+          },
+          {
+            "field": "cycle_position",
+            "type": "str",
+            "desc": "周期位置（底部/复苏/繁荣/衰退）"
+          },
+          {
+            "field": "cycle_verdict",
+            "type": "str",
+            "desc": "产能周期综合判断与投资建议"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "钢铁",
+            "煤炭",
+            "化工"
+          ]
+        }
+      },
+      {
+        "id": "roic_analysis",
+        "name": "ROIC 与资本效率",
+        "category": "manufacturing",
+        "dir_category": "manufacturing",
+        "tags": [
+          "fundamental",
+          "roic",
+          "capital_efficiency",
+          "manufacturing"
+        ],
+        "data_needed": [
+          "income",
+          "balancesheet",
+          "cashflow"
+        ],
+        "outputs": [
+          {
+            "field": "roic_current",
+            "type": "float",
+            "desc": "当前ROIC（%）"
+          },
+          {
+            "field": "roic_5y_avg",
+            "type": "float",
+            "desc": "5年平均ROIC（%）"
+          },
+          {
+            "field": "invested_capital",
+            "type": "float",
+            "desc": "投入资本（亿元）"
+          },
+          {
+            "field": "roic_vs_wacc",
+            "type": "str",
+            "desc": "ROIC与WACC对比（创造价值/持平/毁灭价值）"
+          },
+          {
+            "field": "capital_efficiency_verdict",
+            "type": "str",
+            "desc": "资本效率综合评价"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "钢铁",
+            "煤炭",
+            "化工",
+            "汽车"
+          ]
+        }
+      },
+      {
+        "id": "mfg_supply_chain_position",
+        "name": "供应链地位分析",
+        "category": "fundamental",
+        "dir_category": "manufacturing",
+        "tags": [
+          "manufacturing",
+          "supply_chain",
+          "bargaining_power",
+          "pricing"
+        ],
+        "data_needed": [
+          "income",
+          "balancesheet",
+          "cashflow",
+          "fina_mainbz"
+        ],
+        "outputs": [
+          {
+            "field": "pricing_power_score",
+            "type": "enum [强/中/弱]",
+            "desc": "定价能力评分"
+          },
+          {
+            "field": "receivables_days",
+            "type": "float",
+            "desc": "应收账款周转天数"
+          },
+          {
+            "field": "payables_days",
+            "type": "float",
+            "desc": "应付账款周转天数"
+          },
+          {
+            "field": "cash_conversion_cycle",
+            "type": "float",
+            "desc": "现金转换周期（天）"
+          },
+          {
+            "field": "bargaining_position",
+            "type": "str",
+            "desc": "上下游议价地位综合判断"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "钢铁",
+            "煤炭",
+            "化工",
+            "汽车",
+            "家电"
+          ]
+        }
+      }
+    ],
+    "screening": [
+      {
+        "id": "data_source_grading",
+        "name": "数据源分级与可信度体系",
+        "category": "screening",
+        "dir_category": "screening",
+        "tags": [
+          "screening",
+          "data_quality",
+          "verification"
+        ],
+        "data_needed": [
+          "price_history",
+          "balancesheet",
+          "income",
+          "cashflow",
+          "fina_indicator",
+          "dividend"
+        ],
+        "outputs": [
+          {
+            "field": "data_confidence",
+            "type": "str",
+            "desc": "高/中/低"
+          },
+          {
+            "field": "data_warnings",
+            "type": "list",
+            "desc": "数据质量警告列表"
+          }
+        ]
+      },
+      {
+        "id": "geopolitical_exclusion",
+        "name": "地缘政治风险排除",
+        "category": "screening",
+        "dir_category": "screening",
+        "tags": [
+          "screening",
+          "risk",
+          "geopolitical"
+        ],
+        "data_needed": [
+          "fina_mainbz",
+          "balancesheet"
+        ],
+        "outputs": [
+          {
+            "field": "geo_risk_level",
+            "type": "str",
+            "desc": "极高/中等/低/极低"
+          },
+          {
+            "field": "geo_risk_reason",
+            "type": "str",
+            "desc": "地缘政治风险原因说明"
+          },
+          {
+            "field": "geo_excluded",
+            "type": "bool",
+            "desc": "是否一票否决"
+          }
+        ]
+      },
+      {
+        "id": "quick_screen_5min",
+        "name": "5分钟快速排除法",
+        "category": "screening",
+        "dir_category": "screening",
+        "tags": [
+          "screening",
+          "initial_filter"
+        ],
+        "data_needed": [
+          "price_history",
+          "fina_indicator",
+          "cashflow"
+        ],
+        "outputs": [
+          {
+            "field": "price_position_pct",
+            "type": "float",
+            "desc": "价格位置百分比 (0-100)"
+          },
+          {
+            "field": "debt_ratio_pct",
+            "type": "float",
+            "desc": "资产负债率"
+          },
+          {
+            "field": "consecutive_profit_years",
+            "type": "int",
+            "desc": "连续盈利年数"
+          },
+          {
+            "field": "pass_screening",
+            "type": "bool",
+            "desc": "是否通过初筛"
+          },
+          {
+            "field": "screening_notes",
+            "type": "str",
+            "desc": "筛选结论备注"
+          }
+        ]
+      },
+      {
+        "id": "soe_identification",
+        "name": "央国企背景识别与分类",
+        "category": "screening",
+        "dir_category": "screening",
+        "tags": [
+          "screening",
+          "governance",
+          "soe"
+        ],
+        "data_needed": [
+          "top10_holders"
+        ],
+        "outputs": [
+          {
+            "field": "is_soe",
+            "type": "bool",
+            "desc": "是否为国有企业"
+          },
+          {
+            "field": "soe_type",
+            "type": "str",
+            "desc": "央企/地方国企/混合所有制/民营"
+          },
+          {
+            "field": "controlling_shareholder",
+            "type": "str",
+            "desc": "最终控制人名称"
+          }
+        ]
+      }
+    ],
+    "special": [
+      {
+        "id": "cigar_butt",
+        "name": "烟蒂股深度价值分析框架",
+        "category": "special",
+        "dir_category": "special",
+        "tags": [
+          "valuation",
+          "special",
+          "cigar_butt",
+          "deep_value"
+        ],
+        "data_needed": [
+          "balancesheet",
+          "income",
+          "cashflow",
+          "daily_indicators"
+        ],
+        "outputs": [
+          {
+            "field": "is_cigar_butt",
+            "type": "bool",
+            "desc": "是否符合烟蒂股标准"
+          },
+          {
+            "field": "liquidation_value",
+            "type": "float",
+            "desc": "T级加权清算价值(亿元)"
+          }
+        ]
+      },
+      {
+        "id": "light_asset_model",
+        "name": "轻资产商业模式分析框架",
+        "category": "special",
+        "dir_category": "special",
+        "tags": [
+          "special",
+          "valuation",
+          "business_model",
+          "light_asset"
+        ],
+        "data_needed": [
+          "income",
+          "cashflow",
+          "balancesheet",
+          "daily_indicators"
+        ],
+        "outputs": [
+          {
+            "field": "is_light_asset",
+            "type": "bool",
+            "desc": "是否符合轻资产模式特征"
+          },
+          {
+            "field": "recurring_revenue_pct",
+            "type": "float",
+            "desc": "经常性收入占比(%)"
+          }
+        ]
+      }
+    ],
+    "tech": [
+      {
+        "id": "tech_growth",
+        "name": "科技成长性分析",
+        "category": "fundamental",
+        "dir_category": "tech",
+        "tags": [
+          "tech",
+          "growth",
+          "rnd",
+          "scalability"
+        ],
+        "data_needed": [
+          "income",
+          "fina_indicator",
+          "cashflow"
+        ],
+        "outputs": [
+          {
+            "field": "revenue_growth_rate",
+            "type": "float",
+            "desc": "最近一年营业收入增速(%)"
+          },
+          {
+            "field": "rnd_intensity",
+            "type": "float",
+            "desc": "研发费用占收入比(%)"
+          },
+          {
+            "field": "scalability_score",
+            "type": "enum [高/中/低]",
+            "desc": "商业模式可扩展性评分"
+          },
+          {
+            "field": "growth_verdict",
+            "type": "str",
+            "desc": "成长性综合结论"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "科技"
+          ]
+        }
+      },
+      {
+        "id": "tech_valuation",
+        "name": "科技股估值方法",
+        "category": "valuation",
+        "dir_category": "tech",
+        "tags": [
+          "tech",
+          "valuation",
+          "ps",
+          "peg",
+          "ev_revenue"
+        ],
+        "data_needed": [
+          "income",
+          "price_history",
+          "fina_indicator",
+          "cashflow"
+        ],
+        "outputs": [
+          {
+            "field": "ps_ratio",
+            "type": "float",
+            "desc": "市销率（PS）"
+          },
+          {
+            "field": "peg_ratio",
+            "type": "float",
+            "desc": "PEG比率（仅盈利公司）"
+          },
+          {
+            "field": "ev_revenue",
+            "type": "float",
+            "desc": "企业价值/收入（EV/Revenue）"
+          },
+          {
+            "field": "valuation_verdict",
+            "type": "str",
+            "desc": "估值综合结论"
+          }
+        ],
+        "gate": {
+          "only_industry": [
+            "科技"
+          ]
+        }
+      }
+    ],
+    "valuation": [
+      {
+        "id": "owner_earnings",
+        "name": "巴菲特所有者收益计算",
+        "category": "valuation",
+        "dir_category": "valuation",
+        "tags": [
+          "valuation",
+          "fcf",
+          "owner_earnings",
+          "buffett"
+        ],
+        "data_needed": [
+          "income",
+          "cashflow",
+          "balancesheet"
+        ],
+        "outputs": [
+          {
+            "field": "owner_earnings",
+            "type": "float",
+            "desc": "所有者收益(亿元)"
+          },
+          {
+            "field": "owner_earnings_formula",
+            "type": "str",
+            "desc": "所有者收益计算公式明细"
+          },
+          {
+            "field": "fcf",
+            "type": "float",
+            "desc": "自由现金流(亿元)"
+          },
+          {
+            "field": "maintenance_capex",
+            "type": "float",
+            "desc": "维持性资本支出(亿元)"
+          },
+          {
+            "field": "owner_earnings_valid",
+            "type": "bool",
+            "desc": "所有者收益计算是否有效(负值时为false)"
+          }
+        ],
+        "gate": {
+          "exclude_industry": [
+            "银行",
+            "保险",
+            "证券",
+            "多元金融"
+          ]
+        }
+      },
+      {
+        "id": "pe_trap_detection",
+        "name": "PE陷阱识别与规避",
+        "category": "valuation",
+        "dir_category": "valuation",
+        "tags": [
+          "valuation",
+          "pe",
+          "trap",
+          "quality"
+        ],
+        "data_needed": [
+          "income",
+          "cashflow",
+          "balancesheet",
+          "daily_indicators"
+        ],
+        "outputs": [
+          {
+            "field": "pe_trap_warning",
+            "type": "bool",
+            "desc": "PE陷阱警示"
+          },
+          {
+            "field": "pe_trap_reasons",
+            "type": "list",
+            "desc": "PE陷阱原因列表"
+          },
+          {
+            "field": "valuation_method",
+            "type": "str",
+            "desc": "推荐估值方法"
+          }
+        ]
+      },
+      {
+        "id": "safety_margin",
+        "name": "动态安全边际（市场周期联动）",
+        "category": "valuation",
+        "dir_category": "valuation",
+        "tags": [
+          "valuation",
+          "risk",
+          "safety_margin",
+          "market_cycle"
+        ],
+        "data_needed": [
+          "daily_indicators",
+          "income",
+          "cashflow",
+          "balancesheet"
+        ],
+        "outputs": [
+          {
+            "field": "safety_margin_pct",
+            "type": "float",
+            "desc": "安全边际百分比(%)"
+          },
+          {
+            "field": "market_condition",
+            "type": "str",
+            "desc": "市场周期状态(牛市/震荡市/熊市)"
+          },
+          {
+            "field": "buy_point",
+            "type": "float",
+            "desc": "买入价位(元)"
+          },
+          {
+            "field": "sell_point",
+            "type": "float",
+            "desc": "卖出价位(元)"
+          }
+        ]
+      },
+      {
+        "id": "valuation_dividend",
+        "name": "债券视角股息估值法",
+        "category": "valuation",
+        "dir_category": "valuation",
+        "tags": [
+          "valuation",
+          "dividend",
+          "yield"
+        ],
+        "data_needed": [
+          "daily_indicators",
+          "dividend",
+          "income",
+          "cashflow"
+        ],
+        "outputs": [
+          {
+            "field": "dividend_yield_pct",
+            "type": "float",
+            "desc": "当期股息率(%)"
+          },
+          {
+            "field": "dividend_sustainable",
+            "type": "bool",
+            "desc": "股息是否可持续"
+          }
+        ]
+      },
+      {
+        "id": "valuation_fcf",
+        "name": "自由现金流(FCF)完整估值",
+        "category": "valuation",
+        "dir_category": "valuation",
+        "tags": [
+          "valuation",
+          "fcf",
+          "ev"
+        ],
+        "data_needed": [
+          "income",
+          "cashflow",
+          "balancesheet",
+          "daily_indicators"
+        ],
+        "outputs": [
+          {
+            "field": "net_cash",
+            "type": "float",
+            "desc": "净现金(亿元)"
+          },
+          {
+            "field": "ev",
+            "type": "float",
+            "desc": "企业价值EV(亿元)"
+          },
+          {
+            "field": "ev_fcf_multiple",
+            "type": "float",
+            "desc": "EV/FCF倍数"
+          },
+          {
+            "field": "turtle_rating",
+            "type": "str",
+            "desc": "乌龟评级(五档)"
+          },
+          {
+            "field": "fair_value_per_share",
+            "type": "float",
+            "desc": "合理每股价值(元)"
+          },
+          {
+            "field": "topdown_return_pct",
+            "type": "float",
+            "desc": "穿透回报率(%)"
+          },
+          {
+            "field": "valuation_crosscheck",
+            "type": "str",
+            "desc": "双向验证结论(一致/需调整)"
+          }
+        ],
+        "gate": {
+          "exclude_industry": [
+            "银行",
+            "保险",
+            "证券",
+            "多元金融"
+          ]
+        }
+      },
+      {
+        "id": "valuation_repair",
+        "name": "估值修复框架与目标价设定",
+        "category": "valuation",
+        "dir_category": "valuation",
+        "tags": [
+          "valuation",
+          "repair",
+          "target_price",
+          "exit"
+        ],
+        "data_needed": [
+          "income",
+          "cashflow",
+          "balancesheet",
+          "daily_indicators"
+        ],
+        "outputs": [
+          {
+            "field": "repair_target",
+            "type": "str",
+            "desc": "修复目标价及对应估值倍数"
+          },
+          {
+            "field": "repair_catalyst",
+            "type": "str",
+            "desc": "预期修复催化剂"
+          },
+          {
+            "field": "expected_repair_return_pct",
+            "type": "float",
+            "desc": "预期修复回报率(%)"
+          }
+        ]
+      }
+    ]
+  }
+}
