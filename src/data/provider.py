@@ -213,8 +213,14 @@ def get_provider(name: str = None) -> DataProvider:
         elif target == "crawler":
             from .crawler import CrawlerProvider
             register("crawler", CrawlerProvider())
+        elif target == "bloomberg":
+            from .bloomberg import BloombergProvider
+            register("bloomberg", BloombergProvider())
+        elif target == "yfinance":
+            from .yfinance_us import YFinanceProvider
+            register("yfinance", YFinanceProvider())
         else:
-            raise ValueError(f"未知数据提供者: {target}，已注册: {list(_registry.keys())}")
+            raise ValueError(f"Unknown provider: {target}. Registered: {list(_registry.keys())}")
 
     return _registry[target]
 
