@@ -1,0 +1,234 @@
+meta:
+  name: US Quality Yield (QY) Strategy
+  version: "1.0"
+  description: >
+    4-factor framework for US equities. Parallel qualitative + quantitative analysis
+    with PASS/VETO gates and 0-100 hybrid scoring. Bloomberg preferred, yfinance fallback.
+  market: US
+  provider: bloomberg  # bloomberg | yfinance
+
+paths:
+  operators_dir: operators/us_qy
+  factors_dir: factors/us
+
+# --- Screening ---
+screening:
+  exclude:
+    - field: industry
+      contains: [Banks, Insurance, Diversified Financial Services]
+  filters:
+    - field: market_cap
+      min: 1000             # $1B minimum (millions USD)
+    - field: pe_ttm
+      min: 0.01
+      max: 30.0
+    - field: pb
+      min: 0.01
+      max: 5.0
+    - field: gross_margin_avg_3y
+      min: 15.0
+    - field: debt_to_equity
+      max: 2.0
+  scoring:
+    factors:
+      - field: shareholder_yield
+        weight: 0.35
+        lower_better: false
+        full: 10.0
+        zero: 2.0
+      - field: roe_avg_3y
+        weight: 0.25
+        lower_better: false
+        full: 25.0
+        zero: 10.0
+      - field: pe_ttm
+        weight: 0.20
+        lower_better: true
+        full: 8.0
+        zero: 25.0
+      - field: owner_earnings_yield
+        weight: 0.20
+        lower_better: false
+        full: 12.0
+        zero: 3.0
+    tiers:
+      - name: Gold
+        conditions:
+          - {field: shareholder_yield, min: 8.0}
+          - {field: roe_avg_3y, min: 15.0}
+          - {field: pe_ttm, max: 15.0}
+      - name: Silver
+        conditions:
+          - {field: shareholder_yield, min: 5.0}
+          - {field: roe_avg_3y, min: 12.0}
+          - {field: pe_ttm, max: 20.0}
+      - name: Bronze
+        conditions:
+          - {field: shareholder_yield, min: 3.0}
+          - {field: roe_avg_3y, min: 10.0}
+
+# --- Chapter DAG ---
+# Preserves parallel A||B architecture via topological batching:
+#   Batch 1: Ch1
+#   Batch 2: Ch2 || Ch5  (qual A1 || quant B1)
+#   Batch 3: Ch3 || Ch6  (qual A2 || quant B2)
+#   Batch 4: Ch4          (qual A3)
+#   Batch 5: Ch7          (valuation C)
+framework:
+  chapters:
+    ch01:
+      name: Data Quality & Quick Screen
+      depends: []
+      operators:
+        - f1a_quick_screen
+
+    ch02:
+      name: "Business Model & Moat Gate (A1)"
+      depends: [ch01]
+      operators:
+        - capital_intensity
+        - payment_pattern
+        - revenue_quality
+        - profit_quality
+        - biz_model_classification
+        - moat_quant_gate
+
+    ch03:
+      name: "Moat Deep Dive (A2)"
+      depends: [ch02]
+      operators:
+        - moat_framework_a
+        - moat_greenwald
+        - false_advantages
+        - competitor_comparison
+        - moat_sustainability
+
+    ch04:
+      name: "External & Management (A3)"
+      depends: [ch02, ch03]
+      operators:
+        - cyclicality_assessment
+        - management_assessment
+        - mda_interpretation
+
+    ch05:
+      name: "Quantitative — Coarse Return (B1)"
+      depends: [ch01]
+      operators:
+        - owner_earnings_us
+        - distribution_capacity
+        - coarse_penetration_return
+
+    ch06:
+      name: "Quantitative — Refined Return (B2+B3)"
+      depends: [ch05]
+      operators:
+        - cash_revenue_reconstruction
+        - non_recurring_classification
+        - operating_outflows
+        - gaap_audit
+        - refined_return_aa
+        - sensitivity_cross_validation
+
+    ch07:
+      name: "Valuation & Synthesis (C)"
+      depends: [ch04, ch05, ch06]
+      operators:
+        - valuation_synthesis_us
+
+# --- Synthesis ---
+synthesis:
+  thinking_steps:
+    - step: Veto Gate Check
+      instruction: |
+        Check all veto gates in sequence:
+        1. F1A quick screen: f1a_pass must be true
+        2. F2 distribution capacity: distribution_capacity_pass must be true
+        3. F2 coarse return: coarse_return_pass must be true (R >= Rf 4.3%)
+        4. F3 refined return: f3_conclusion must be PASS (GG >= Threshold II 7.3%)
+        If ANY veto triggers -> set total_score <= 25, recommendation = AVOID.
+
+    - step: Factor Sub-Scoring
+      instruction: |
+        For PASS stocks, compute sub-scores:
+        F1 score (0-25): Asset quality grade A=25, B=20, C=15, D=10
+        F2 score (0-25): Based on coarse return R vs thresholds
+          R > 10% = 25, R > 7.3% = 20, R > 5% = 15, R > 4.3% = 10
+        F3 score (0-25): Based on refined GG vs Threshold II + credibility
+          GG > 10% + HIGH credibility = 25, GG > 7.3% + MEDIUM = 15
+        F4 score (0-25): Based on safety margin + value trap count
+          margin > 3pp + 0 traps = 25, margin > 1pp + <=1 trap = 15
+        Total = F1 + F2 + F3 + F4
+
+    - step: Consistency Adjudication
+      instruction: |
+        Cross-validate qualitative and quantitative conclusions.
+        If material contradictions exist between moat rating and cash quality,
+        or between management assessment and distribution willingness,
+        cap total score at 65 (cannot reach BUY threshold).
+
+    - step: Final Recommendation
+      instruction: |
+        Apply scoring thresholds and state recommendation clearly.
+
+  scoring:
+    anchors:
+      - range: "85-100"
+        profile: "GG >> Threshold II + WIDE moat + excellent management + no traps"
+      - range: "70-84"
+        profile: "GG > Threshold II + NARROW+ moat + manageable risks -> BUY"
+      - range: "50-69"
+        profile: "GG near threshold, qualitative concerns -> HOLD/WATCH"
+      - range: "30-49"
+        profile: "GG below threshold or value trap risk -> WATCH"
+      - range: "0-29"
+        profile: "VETO triggered or severe risks -> AVOID"
+
+  decision:
+    buy_threshold: 70
+    hold_range: [50, 69]
+    watch_range: [30, 49]
+    avoid_threshold: 29
+
+# --- US Market Parameters ---
+parameters:
+  risk_free_rate: 0.043        # Rf = 4.3% (US 10Y Treasury)
+  threshold_ii: 0.073          # max(5%, Rf + 3%)
+  dividend_tax_rate: 0.15      # US qualified dividend tax
+  currency: USD
+  amounts_unit: millions
+
+# --- Backtest ---
+backtest:
+  start_date: "2020-06-30"
+  end_date: "2025-12-31"
+  interval: "6m"
+  top_n: 30
+  concurrency: 3
+  forward_windows: [30, 90, 180, 365]
+  benchmark: SPY
+  universe: sp500
+  benchmarks:
+    - name: SPY
+      type: index
+      ticker: SPY
+    - name: Screen Pool
+      type: equal_weight
+      source: screen
+    - name: PASS Pool
+      type: equal_weight
+      source: pass
+    - name: BUY Signal
+      type: equal_weight
+      source: buy
+      threshold: 70
+    - name: Top 5
+      type: top_n
+      source: score
+      n: 5
+
+# --- LLM ---
+llm:
+  model: ${LLM_MODEL:-claude-sonnet-4-20250514}
+  max_tokens: 8192
+  temperature: 0.1

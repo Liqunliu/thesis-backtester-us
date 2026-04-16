@@ -1,7 +1,7 @@
 [project]
-name = "thesis-backtester"
-version = "0.2.0"
-description = "AI-powered investment analysis framework with structured operator composition and multi-baseline backtesting"
+name = "thesis-backtester-us"
+version = "0.3.0"
+description = "AI-powered US equity investment analysis framework — us-qy 4-factor strategy with Bloomberg data and multi-baseline backtesting"
 requires-python = ">=3.9"
 license = "AGPL-3.0-or-later"
 readme = "README.md"
@@ -14,7 +14,7 @@ classifiers = [
     "Topic :: Office/Business :: Financial :: Investment",
 ]
 dependencies = [
-    # 核心
+    # Core
     "pandas>=1.5",
     "pyarrow>=10.0",
     "pyyaml>=6.0",
@@ -22,23 +22,32 @@ dependencies = [
     "python-dateutil>=2.8",
     # LLM
     "openai>=1.0",
-    # 数据源
+    # Data sources — US
+    "yfinance>=0.2.30",
+    "beautifulsoup4>=4.12",
+    "lxml>=4.9",
+    "requests>=2.31",
+    # Data sources — China (optional, kept for upstream compatibility)
     "tushare>=1.2",
     "akshare>=1.14",
     # Web
     "streamlit>=1.30",
-    # 可视化
+    # Visualization
     "matplotlib>=3.5",
 ]
 
 [project.optional-dependencies]
+bloomberg = [
+    "blpapi>=3.19",
+]
 dev = [
     "ruff>=0.1",
     "pytest>=7.0",
 ]
 
 [project.urls]
-Repository = "https://github.com/turtlequant/thesis-backtester"
+Repository = "https://github.com/Liqunliu/thesis-backtester-us"
+Upstream = "https://github.com/Liqunliu/thesis-backtester"
 
 [project.scripts]
 thesis-backtester = "src.engine.launcher:main"
