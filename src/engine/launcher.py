@@ -133,8 +133,20 @@ def _dispatch_strategy(config: StrategyConfig, command: str, args: list):
         _cmd_backtest_agent(config, args)
     elif command == "backtest-eval":
         _cmd_backtest_eval(config, args)
+    # US backtest commands
+    elif command == "backtest-screen-us":
+        from src.backtest.backtest_us import step_screen_us
+        step_screen_us(config)
+    elif command == "backtest-agent-us":
+        from src.backtest.backtest_us import step_agent_us
+        dry_run = "--dry-run" in args
+        retry = int(args[args.index("--retry") + 1]) if "--retry" in args else 1
+        step_agent_us(config, max_retry=retry, dry_run=dry_run)
+    elif command == "backtest-eval-us":
+        from src.backtest.backtest_us import step_eval_us
+        step_eval_us(config)
     else:
-        print(f"未知策略命令: {command}")
+        print(f"Unknown command: {command}")
         sys.exit(1)
 
 
