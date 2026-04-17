@@ -1,27 +1,29 @@
 """
-LLM 客户端 — OpenAI 兼容格式
+LLM Client — supports OpenAI-compatible API and Claude CLI backend
 
-支持任意 OpenAI chat completions 兼容的 API provider。
-配置通过环境变量或 strategy.yaml 的 llm 节传入。
+Backend selection via LLM_BACKEND env var or strategy.yaml:
+  - "api" (default): OpenAI-compatible API (requires LLM_API_KEY)
+  - "claude-cli": Use 'claude' CLI subprocess (no API key, uses Claude Code auth)
 
-用法:
-    client = LLMClient.from_config(strategy_config)
+Usage:
+    client = LLMClient.from_strategy(config)
     response = await client.chat(messages, tools)
 """
 import asyncio
+import json
 import os
 import logging
-from dataclasses import dataclass, field
+import subprocess
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
-
-from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError, APITimeoutError
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class LLMConfig:
-    """LLM 连接配置"""
+    """LLM connection config"""
+    backend: str = "api"  # "api" or "claude-cli"
     base_url: str = "https://api.openai.com/v1"
     api_key: str = ""
     model: str = "gpt-4o"
@@ -30,10 +32,25 @@ class LLMConfig:
 
     @classmethod
     def from_strategy(cls, config) -> "LLMConfig":
-        """从 StrategyConfig 加载 LLM 配置"""
+        """Load from StrategyConfig"""
         llm_raw = config.raw.get("llm", {})
 
-        # 环境变量优先，YAML 中配置的是 env var 的名称
+        # Backend selection: env > yaml > default
+        backend = os.environ.get("LLM_BACKEND", llm_raw.get("backend", "api"))
+
+        # Model: env > yaml > default
+        model_env = llm_raw.get("model_env", "LLM_MODEL")
+        model = os.environ.get(model_env) or llm_raw.get("model", "gpt-4o")
+
+        if backend == "claude-cli":
+            return cls(
+                backend="claude-cli",
+                model=model,
+                max_tokens=llm_raw.get("max_tokens", 8192),
+                temperature=llm_raw.get("temperature", 0.1),
+            )
+
+        # API backend
         base_url_env = llm_raw.get("base_url_env", "LLM_BASE_URL")
         api_key_env = llm_raw.get("api_key_env", "LLM_API_KEY")
 
@@ -41,16 +58,17 @@ class LLMConfig:
         api_key = os.environ.get(api_key_env, "")
 
         if not api_key:
-            raise ValueError(
-                f"LLM API key not found. Set environment variable '{api_key_env}' "
-                f"or configure llm.api_key_env in strategy.yaml"
+            # Auto-detect: fall back to claude-cli if no API key
+            logger.warning("No LLM_API_KEY found, falling back to claude-cli backend")
+            return cls(
+                backend="claude-cli",
+                model=model,
+                max_tokens=llm_raw.get("max_tokens", 8192),
+                temperature=llm_raw.get("temperature", 0.1),
             )
 
-        # model: 环境变量 LLM_MODEL > YAML > 默认 gpt-4o
-        model_env = llm_raw.get("model_env", "LLM_MODEL")
-        model = os.environ.get(model_env) or llm_raw.get("model", "gpt-4o")
-
         return cls(
+            backend="api",
             base_url=base_url,
             api_key=api_key,
             model=model,
@@ -60,20 +78,23 @@ class LLMConfig:
 
 
 class LLMClient:
-    """OpenAI 兼容的异步 LLM 客户端"""
+    """LLM client supporting OpenAI API and Claude CLI backends."""
 
     def __init__(self, llm_config: LLMConfig):
         self.config = llm_config
-        self._client = AsyncOpenAI(
-            base_url=llm_config.base_url,
-            api_key=llm_config.api_key,
-        )
+        self._client = None
+
+        if llm_config.backend == "api":
+            from openai import AsyncOpenAI
+            self._client = AsyncOpenAI(
+                base_url=llm_config.base_url,
+                api_key=llm_config.api_key,
+            )
 
     @classmethod
     def from_strategy(cls, config) -> "LLMClient":
-        """从 StrategyConfig 创建客户端"""
         llm_config = LLMConfig.from_strategy(config)
-        logger.info(f"LLM: {llm_config.base_url} / {llm_config.model}")
+        logger.info(f"LLM backend: {llm_config.backend} / {llm_config.model}")
         return cls(llm_config)
 
     async def chat(
@@ -83,18 +104,88 @@ class LLMClient:
         max_retries: int = 3,
         timeout: float = 600,
     ) -> Any:
-        """
-        发送聊天请求（带重试和超时）
+        """Send chat request. Routes to API or Claude CLI based on backend."""
+        if self.config.backend == "claude-cli":
+            return await self._chat_claude_cli(messages, tools)
+        return await self._chat_api(messages, tools, max_retries, timeout)
 
-        Args:
-            messages: OpenAI 格式的消息列表
-            tools: OpenAI 格式的工具定义列表
-            max_retries: 最大重试次数
-            timeout: 单次请求超时秒数
+    # ---- Claude CLI backend ----
 
-        Returns:
-            ChatCompletion response
+    async def _chat_claude_cli(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Any:
+        """Execute via 'claude' CLI subprocess.
+
+        Converts OpenAI message format to a single prompt string,
+        runs 'claude --print', and wraps the response in a
+        ChatCompletion-like object.
         """
+        # Build prompt from messages
+        prompt_parts = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "system":
+                prompt_parts.append(f"<system>\n{content}\n</system>\n")
+            elif role == "user":
+                prompt_parts.append(content)
+            elif role == "assistant":
+                prompt_parts.append(f"[Previous assistant response]: {content[:500]}")
+            elif role == "tool":
+                tool_id = msg.get("tool_call_id", "")
+                prompt_parts.append(f"[Tool result for {tool_id}]: {content[:2000]}")
+
+        # Add tool definitions to system context if present
+        if tools:
+            tool_desc = json.dumps(tools, indent=2)
+            prompt_parts.insert(0, f"<available_tools>\n{tool_desc}\n</available_tools>\n")
+            prompt_parts.append(
+                "\nIMPORTANT: Respond with a JSON object containing your analysis. "
+                "If you need to use a tool, respond with a JSON object containing "
+                "'tool_calls' array with 'name' and 'arguments' fields."
+            )
+
+        full_prompt = "\n\n".join(prompt_parts)
+
+        # Run claude CLI
+        logger.debug("Calling claude CLI (prompt length: %d chars)", len(full_prompt))
+        try:
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["claude", "--print", "--model", self.config.model, "-p", full_prompt],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            response_text = result.stdout.strip()
+            if result.returncode != 0:
+                logger.error("claude CLI error: %s", result.stderr[:500])
+                response_text = result.stderr or "Claude CLI returned an error"
+        except subprocess.TimeoutExpired:
+            response_text = "Claude CLI timed out after 600 seconds"
+        except FileNotFoundError:
+            raise RuntimeError(
+                "Claude CLI not found. Install it: npm install -g @anthropic-ai/claude-code\n"
+                "Or set LLM_API_KEY to use the API backend instead."
+            )
+
+        # Wrap in ChatCompletion-like response
+        return _ClaudeCliResponse(response_text)
+
+    # ---- OpenAI API backend ----
+
+    async def _chat_api(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        max_retries: int = 3,
+        timeout: float = 600,
+    ) -> Any:
+        """Send via OpenAI-compatible API with retry logic."""
+        from openai import APIError, APIConnectionError, RateLimitError, APITimeoutError
+
         kwargs = {
             "model": self.config.model,
             "messages": messages,
@@ -113,26 +204,72 @@ class LLMClient:
                 return response
             except RateLimitError as e:
                 last_error = e
-                wait = min(2 ** attempt * 5, 60)  # 10s, 20s, 40s (max 60s)
-                logger.warning(f"限流，{wait}s 后重试 (第{attempt}次): {e}")
+                wait = min(2 ** attempt * 5, 60)
+                logger.warning(f"Rate limited, retry in {wait}s (attempt {attempt}): {e}")
                 await asyncio.sleep(wait)
             except (APIConnectionError, APITimeoutError) as e:
                 last_error = e
-                wait = 2 ** attempt * 2  # 4s, 8s, 16s
-                logger.warning(f"连接/超时错误，{wait}s 后重试 (第{attempt}次): {e}")
+                wait = 2 ** attempt * 2
+                logger.warning(f"Connection error, retry in {wait}s (attempt {attempt}): {e}")
                 await asyncio.sleep(wait)
             except APIError as e:
-                # 5xx 服务端错误可重试，4xx 客户端错误不重试
                 if e.status_code and e.status_code >= 500:
                     last_error = e
                     wait = 2 ** attempt * 3
-                    logger.warning(f"服务端错误 {e.status_code}，{wait}s 后重试 (第{attempt}次)")
+                    logger.warning(f"Server error {e.status_code}, retry in {wait}s (attempt {attempt})")
                     await asyncio.sleep(wait)
                 else:
-                    raise  # 400/401/403 等直接抛出
+                    raise
 
-        raise last_error  # 重试耗尽
+        raise last_error
 
     async def close(self):
-        """关闭客户端连接"""
-        await self._client.close()
+        if self._client is not None:
+            await self._client.close()
+
+
+# ---- Claude CLI response wrapper ----
+
+class _ClaudeCliChoice:
+    def __init__(self, text: str):
+        self.message = _ClaudeCliMessage(text)
+        self.finish_reason = "stop"
+
+
+class _ClaudeCliMessage:
+    def __init__(self, text: str):
+        self.role = "assistant"
+        self.content = text
+        self.tool_calls = None
+
+        # Try to parse tool calls from response
+        if '"tool_calls"' in text:
+            try:
+                data = json.loads(text)
+                if "tool_calls" in data:
+                    self.tool_calls = [
+                        _ClaudeCliToolCall(tc) for tc in data["tool_calls"]
+                    ]
+                    self.content = data.get("content", "")
+            except json.JSONDecodeError:
+                pass
+
+
+class _ClaudeCliToolCall:
+    def __init__(self, tc_dict: dict):
+        self.id = tc_dict.get("id", "call_cli_1")
+        self.type = "function"
+        self.function = _ClaudeCliFunction(tc_dict)
+
+
+class _ClaudeCliFunction:
+    def __init__(self, tc_dict: dict):
+        self.name = tc_dict.get("name", "")
+        args = tc_dict.get("arguments", {})
+        self.arguments = json.dumps(args) if isinstance(args, dict) else str(args)
+
+
+class _ClaudeCliResponse:
+    def __init__(self, text: str):
+        self.choices = [_ClaudeCliChoice(text)]
+        self.usage = type("Usage", (), {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})()
