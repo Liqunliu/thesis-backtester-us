@@ -94,25 +94,59 @@ class StrategyConfig:
     # ==================== 分析框架 ====================
 
     def get_chapter_defs(self) -> List[dict]:
-        """获取章节定义列表 — 优先从独立 chapters.yaml 加载"""
+        """获取章节定义列表 — 优先从独立 chapters.yaml 加载
+
+        Supports both list format (legacy) and dict format (us-qy):
+          List: [{id: ch01, ...}, {id: ch02, ...}]
+          Dict: {ch01: {name: ..., operators: [...]}, ch02: {...}}
+        """
         # 1. 尝试独立文件
         chapters_path = self.get_chapters_path()
         if chapters_path.exists():
             with open(chapters_path, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f)
             if data and 'chapters' in data:
-                return data['chapters']
+                return self._normalize_chapters(data['chapters'])
 
         # 2. 回退到内联定义
         framework = self.raw.get('framework', {})
-        return framework.get('chapters', [])
+        chapters = framework.get('chapters', [])
+        return self._normalize_chapters(chapters)
+
+    @staticmethod
+    def _normalize_chapters(chapters) -> List[dict]:
+        """Convert dict-format chapters to list-format with 'id' field.
+
+        Input dict: {ch01: {name: ..., depends: [...], operators: [...]}}
+        Output list: [{id: ch01, title: ..., dependencies: [...], operators: [...]}]
+        """
+        if isinstance(chapters, list):
+            return chapters
+        if isinstance(chapters, dict):
+            result = []
+            for ch_id, ch_def in chapters.items():
+                entry = dict(ch_def)
+                entry['id'] = ch_id
+                # Normalize field names for runtime compatibility
+                if 'name' in entry and 'title' not in entry:
+                    entry['title'] = entry.pop('name')
+                if 'depends' in entry and 'dependencies' not in entry:
+                    entry['dependencies'] = entry.pop('depends')
+                result.append(entry)
+            return result
+        return []
 
     def get_operator_registry(self):
-        """获取算子注册表 (延迟导入避免循环依赖)"""
+        """获取算子注册表 (延迟导入避免循环依赖)
+
+        Supports operators_dir from paths (e.g., 'operators/us_qy')
+        or framework config (e.g., 'operators/v1'), with paths taking priority.
+        """
         from .operators import OperatorRegistry
+        ops_dir = self.get_us_operators_dir() or self.get_operators_dir()
         return OperatorRegistry(
             strategy_dir=self.strategy_dir,
-            operators_dir=self.get_operators_dir(),
+            operators_dir=ops_dir,
         )
 
     def get_chapter_focus(self, chapter_def: dict) -> str:
@@ -300,6 +334,74 @@ class StrategyConfig:
 
     def get_agent_concurrency(self) -> int:
         return self.get_backtest_config().get('agent_concurrency', 3)
+
+    # ==================== US Market Config ====================
+
+    @property
+    def market(self) -> str:
+        """Market: 'CN' (default) or 'US'."""
+        meta = self.raw.get('meta', {})
+        return meta.get('market', 'CN')
+
+    @property
+    def provider_name(self) -> str:
+        """Data provider name: 'tushare', 'bloomberg', 'yfinance'."""
+        meta = self.raw.get('meta', {})
+        return meta.get('provider', 'tushare')
+
+    def is_us_market(self) -> bool:
+        return self.market.upper() == 'US'
+
+    def get_market_parameters(self) -> dict:
+        """US-QY market parameters (Rf, Threshold II, tax rates).
+
+        Returns dict with defaults for US market:
+          risk_free_rate: 0.043
+          threshold_ii: 0.073
+          dividend_tax_rate: 0.15
+          currency: USD
+          amounts_unit: millions
+        """
+        params = self.raw.get('parameters', {})
+        if self.is_us_market() and not params:
+            return {
+                'risk_free_rate': 0.043,
+                'threshold_ii': 0.073,
+                'dividend_tax_rate': 0.15,
+                'currency': 'USD',
+                'amounts_unit': 'millions',
+            }
+        return params
+
+    def get_us_operators_dir(self) -> Optional[str]:
+        """Get operators directory from paths config or framework config.
+
+        Supports strategy-local operators (e.g., 'operators/us_qy').
+        """
+        paths = self._paths()
+        if 'operators_dir' in paths:
+            return paths['operators_dir']
+        return self.get_operators_dir()
+
+    def get_us_factors_dir(self) -> Optional[str]:
+        """Get US-specific factors directory."""
+        paths = self._paths()
+        return paths.get('factors_dir', None)
+
+    def get_benchmark(self) -> str:
+        """Backtest benchmark ticker."""
+        bt = self.get_backtest_config()
+        return bt.get('benchmark', 'SPY' if self.is_us_market() else '000300.SH')
+
+    def get_universe(self) -> str:
+        """Stock universe for screening."""
+        bt = self.get_backtest_config()
+        return bt.get('universe', 'sp500' if self.is_us_market() else 'a_shares')
+
+    def get_analyst_role(self) -> str:
+        framework = self.raw.get('framework', {})
+        default = 'Investment Analyst' if self.is_us_market() else '投资分析师'
+        return framework.get('analyst_role', default)
 
     # ==================== Schema ====================
 

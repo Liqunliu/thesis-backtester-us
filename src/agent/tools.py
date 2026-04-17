@@ -51,21 +51,20 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                             "holder_trade",
                             "share_unlock",
                             "repurchase",
+                            "sbc_history",
+                            "buyback_history",
                         ],
                         "description": (
-                            "数据类型: "
-                            "price_summary=行情概览, valuation=估值指标, "
-                            "balance_sheet=资产负债表, income=利润表, "
-                            "cashflow=现金流量表, financial_indicators=财务指标, "
-                            "dividends=分红历史, holders=前十大股东, "
-                            "float_holders=前十大流通股东, "
-                            "audit_opinion=审计意见, "
-                            "business_composition=主营业务构成, "
-                            "pledge=股权质押, "
-                            "holder_count=股东人数变化, "
-                            "holder_trade=股东增减持, "
-                            "share_unlock=限售解禁, "
-                            "repurchase=股票回购"
+                            "Data type: "
+                            "price_summary=price overview, valuation=valuation metrics, "
+                            "balance_sheet, income, cashflow, financial_indicators, "
+                            "dividends, holders=top 10 shareholders, "
+                            "float_holders=top 10 float holders, "
+                            "audit_opinion, business_composition, "
+                            "pledge=share pledge, holder_count, holder_trade, "
+                            "share_unlock, repurchase=share buybacks, "
+                            "sbc_history=stock-based compensation history (US), "
+                            "buyback_history=share repurchase history (US)"
                         ),
                     },
                     "periods": {
@@ -101,6 +100,7 @@ TOOL_DEFINITIONS: List[Dict[str, Any]] = [
                                 "audit_opinion", "business_composition",
                                 "pledge", "holder_count", "holder_trade",
                                 "share_unlock", "repurchase",
+                                "sbc_history", "buyback_history",
                             ],
                         },
                         "description": "要查询的数据类型列表",
@@ -362,6 +362,8 @@ class ToolSandbox:
             "holder_trade": self._get_holder_trade,
             "share_unlock": self._get_share_unlock,
             "repurchase": self._get_repurchase,
+            "sbc_history": self._get_sbc_history,
+            "buyback_history": self._get_buyback_history,
         }
 
         handler = handlers.get(data_type)
@@ -734,6 +736,63 @@ class ToolSandbox:
             records.append(record)
 
         return json.dumps({"repurchases": records}, ensure_ascii=False, indent=2)
+
+    # ---- US-specific data types ----
+
+    def _get_sbc_history(self, periods: int) -> str:
+        """Stock-Based Compensation history (US equities)."""
+        cf = self.snapshot.cashflow
+        if cf.empty:
+            return json.dumps({"error": "No cashflow data for SBC extraction"})
+
+        # SBC is typically in cashflow as 'sbc' or 'CF_STOCK_BASED_COMPENSATION'
+        sbc_col = None
+        for candidate in ["sbc", "Stock-Based Compensation", "CF_STOCK_BASED_COMPENSATION"]:
+            if candidate in cf.columns:
+                sbc_col = candidate
+                break
+
+        if sbc_col is None:
+            return json.dumps({"error": "SBC field not found in cashflow data"})
+
+        date_col = "end_date" if "end_date" in cf.columns else cf.columns[0]
+        df = cf[[date_col, sbc_col]].dropna().tail(periods)
+        records = []
+        for _, row in df.iterrows():
+            val = row[sbc_col]
+            records.append({
+                "period": str(row[date_col]),
+                "sbc_amount": round(float(val), 2) if pd.notna(val) else None,
+            })
+
+        return json.dumps({"sbc_history": records}, indent=2)
+
+    def _get_buyback_history(self, periods: int) -> str:
+        """Share repurchase history from cashflow (US equities)."""
+        cf = self.snapshot.cashflow
+        if cf.empty:
+            return json.dumps({"error": "No cashflow data for buyback extraction"})
+
+        buyback_col = None
+        for candidate in ["share_repurchases", "Share Repurchases", "CF_DECR_CAP_STOCK"]:
+            if candidate in cf.columns:
+                buyback_col = candidate
+                break
+
+        if buyback_col is None:
+            return json.dumps({"error": "Buyback field not found in cashflow data"})
+
+        date_col = "end_date" if "end_date" in cf.columns else cf.columns[0]
+        df = cf[[date_col, buyback_col]].dropna().tail(periods)
+        records = []
+        for _, row in df.iterrows():
+            val = row[buyback_col]
+            records.append({
+                "period": str(row[date_col]),
+                "buyback_amount": round(float(val), 2) if pd.notna(val) else None,
+            })
+
+        return json.dumps({"buyback_history": records}, indent=2)
 
     def _format_financial_df(
         self,

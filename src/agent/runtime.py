@@ -77,6 +77,52 @@ def topological_batches(dag: Dict[str, List[str]]) -> List[List[str]]:
     return batches
 
 
+# ==================== Veto Gate Check (US-QY) ====================
+
+# Fields that signal a veto when False
+_VETO_PASS_FIELDS = [
+    "f1a_pass",                # F1A quick screen
+    "distribution_capacity_pass",  # F2 distribution capacity
+    "coarse_return_pass",      # F2 coarse return
+]
+
+# Fields that signal a veto when value is "VETO"
+_VETO_CONCLUSION_FIELDS = [
+    "f2_conclusion",
+    "f3_conclusion",
+]
+
+
+def check_veto_gates(chapter_outputs: Dict[str, Any]) -> Tuple[bool, str]:
+    """Check accumulated chapter outputs for veto signals.
+
+    Scans all chapter outputs for fields ending in _pass (bool) or
+    _conclusion (str == "VETO"). Returns (veto_triggered, reason).
+
+    This runs between DAG batches so downstream chapters can be skipped
+    when a veto is detected, saving LLM tokens.
+    """
+    for ch_id, output in chapter_outputs.items():
+        if not isinstance(output, dict):
+            continue
+
+        # Check explicit pass/fail fields
+        for field in _VETO_PASS_FIELDS:
+            if field in output and output[field] is False:
+                return True, f"{ch_id}.{field} = false"
+
+        # Check conclusion fields
+        for field in _VETO_CONCLUSION_FIELDS:
+            if field in output and str(output[field]).upper() == "VETO":
+                return True, f"{ch_id}.{field} = VETO"
+
+        # Check management veto
+        if output.get("management_veto") is True:
+            return True, f"{ch_id}.management_veto = true"
+
+    return False, ""
+
+
 # ==================== System Prompt 构建 ====================
 
 def build_system_prompt(
@@ -548,6 +594,14 @@ async def run_blind_analysis(
             chapter_outputs[ch_id] = structured or {}
             _progress("chapter_done", ch_id, structured or {})
             logger.info(f"  Completed: {ch_id} ({'structured' if structured else 'text only'})")
+
+        # --- US-QY Veto Gate Check (between batches) ---
+        veto_triggered, veto_reason = check_veto_gates(chapter_outputs)
+        if veto_triggered:
+            logger.warning(f"VETO triggered after batch {batch_idx + 1}: {veto_reason}")
+            _progress("veto", "veto_gate", {"reason": veto_reason, "batch": batch_idx + 1})
+            # Skip remaining batches — go directly to synthesis with capped score
+            break
 
     # 5. 综合研判（传入完整分析文本，让 synthesis 看到推理过程和数据引用）
     _progress("synthesis_start")
