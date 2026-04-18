@@ -17,6 +17,8 @@ from typing import Optional
 
 import pandas as pd
 
+from src.data.cache import DataCache
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -158,6 +160,7 @@ class BloombergProvider:
         self._port = port or int(os.environ.get("BLOOMBERG_PORT", "8194"))
         self._years = years
         self._client: Optional[BloombergClient] = None
+        self._cache = DataCache()
         self._filing_dates: dict[str, pd.DataFrame] = {}  # cache
 
     @property
@@ -268,31 +271,85 @@ class BloombergProvider:
         })
 
     def fetch_daily_indicator_bulk(self, trade_date: str) -> pd.DataFrame:
-        """Fetch PE, PB, DY, market cap for all stocks on a date."""
+        """Fetch PE, PB, DY, market cap, price, shares for all stocks."""
         client = self._ensure_client()
         stocks = self.fetch_stock_list()
         securities = [self._bbg_security(t) for t in stocks["ts_code"]]
 
         df = client._terminal_reference_request(
             securities,
-            ["PE_RATIO", "PX_TO_BOOK_RATIO", "DIVIDEND_YIELD", "CUR_MKT_CAP"],
+            ["PE_RATIO", "PX_TO_BOOK_RATIO", "DIVIDEND_YIELD",
+             "CUR_MKT_CAP", "PX_LAST", "EQY_SH_OUT", "RETURN_COM_EQY"],
         )
         if df.empty:
             return pd.DataFrame()
 
         df["ts_code"] = df["security"].str.replace(" US Equity", "")
         df["trade_date"] = trade_date
-        return df.rename(columns={
+        df = df.rename(columns={
             "PE_RATIO": "pe_ttm",
             "PX_TO_BOOK_RATIO": "pb",
             "DIVIDEND_YIELD": "dv_ttm",
-            "CUR_MKT_CAP": "total_mv",
-        })[["ts_code", "trade_date", "pe_ttm", "pb", "dv_ttm", "total_mv"]]
+            "CUR_MKT_CAP": "total_mv_raw",   # raw USD
+            "PX_LAST": "close",
+            "EQY_SH_OUT": "shares_out",        # millions
+            "RETURN_COM_EQY": "roe",
+        })
+        # Convert market cap to millions for filter compatibility
+        df["total_mv"] = pd.to_numeric(df["total_mv_raw"], errors="coerce") / 1e6
+        df["market_cap"] = df["total_mv"]      # alias used by YAML filter
+        return df[["ts_code", "trade_date", "close", "pe_ttm", "pb",
+                   "dv_ttm", "total_mv", "market_cap", "shares_out", "roe"]]
+
+    # ---- Market data (per stock) ----
+
+    def fetch_market_snapshot(self, ts_code: str) -> pd.DataFrame:
+        """Fetch current market data: price, market cap, PE, PB, DY, ROE, ROA."""
+        cached = self._cache.get(ts_code, "market_snapshot")
+        if cached is not None:
+            logger.debug("Cache hit: %s/market_snapshot", ts_code)
+            return cached
+        client = self._ensure_client()
+        sec = self._bbg_security(ts_code)
+        client.fetch_market_data(sec)
+        raw = client._store.get("market", pd.DataFrame())
+        if raw.empty:
+            return pd.DataFrame()
+        raw = raw.rename(columns=FIELD_DISPLAY_NAMES)
+        out = _rename_df(raw, _MARKET_MAP, ts_code)
+        self._cache.put(ts_code, "market_snapshot", out)
+        return out
+
+    def fetch_price_history(self, ts_code: str, years: int = 2) -> pd.DataFrame:
+        """Fetch daily OHLCV price history for a single stock."""
+        cached = self._cache.get(ts_code, "price_history")
+        if cached is not None:
+            logger.debug("Cache hit: %s/price_history", ts_code)
+            return cached
+        client = self._ensure_client()
+        sec = self._bbg_security(ts_code)
+        client.fetch_daily_prices(sec, years=years)
+        raw = client._store.get("daily_prices", pd.DataFrame())
+        if raw.empty:
+            return pd.DataFrame()
+        out = raw.rename(columns={
+            "PX_OPEN": "open", "PX_HIGH": "high", "PX_LOW": "low",
+            "PX_LAST": "close", "PX_VOLUME": "volume",
+        })
+        out["ts_code"] = ts_code
+        if "date" in out.columns:
+            out = out.rename(columns={"date": "trade_date"})
+        self._cache.put(ts_code, "price_history", out)
+        return out
 
     # ---- Financial statements (per stock) ----
 
     def fetch_income(self, ts_code: str) -> pd.DataFrame:
         """Income statement for a single stock, all available years."""
+        cached = self._cache.get(ts_code, "income")
+        if cached is not None:
+            logger.debug("Cache hit: %s/income", ts_code)
+            return cached
         client = self._ensure_client()
         sec = self._bbg_security(ts_code)
         client.fetch_income_statement(sec, years=self._years)
@@ -306,9 +363,14 @@ class BloombergProvider:
 
         # Add ann_date from EDGAR if available
         out = self._add_ann_dates(out, ts_code)
+        self._cache.put(ts_code, "income", out)
         return out
 
     def fetch_balancesheet(self, ts_code: str) -> pd.DataFrame:
+        cached = self._cache.get(ts_code, "balancesheet")
+        if cached is not None:
+            logger.debug("Cache hit: %s/balancesheet", ts_code)
+            return cached
         client = self._ensure_client()
         sec = self._bbg_security(ts_code)
         client.fetch_balance_sheet(sec, years=self._years)
@@ -318,9 +380,14 @@ class BloombergProvider:
         raw = raw.rename(columns=FIELD_DISPLAY_NAMES)
         out = _rename_df(raw, _BALANCE_MAP, ts_code)
         out = self._add_ann_dates(out, ts_code)
+        self._cache.put(ts_code, "balancesheet", out)
         return out
 
     def fetch_cashflow(self, ts_code: str) -> pd.DataFrame:
+        cached = self._cache.get(ts_code, "cashflow")
+        if cached is not None:
+            logger.debug("Cache hit: %s/cashflow", ts_code)
+            return cached
         client = self._ensure_client()
         sec = self._bbg_security(ts_code)
         client.fetch_cashflow_statement(sec, years=self._years)
@@ -340,26 +407,50 @@ class BloombergProvider:
         cf = cf.rename(columns=FIELD_DISPLAY_NAMES)
         out = _rename_df(cf, _CASHFLOW_MAP, ts_code)
         out = self._add_ann_dates(out, ts_code)
+        self._cache.put(ts_code, "cashflow", out)
         return out
 
     def fetch_financial_indicator(self, ts_code: str) -> pd.DataFrame:
         """Derived financial ratios (margins, leverage, efficiency)."""
+        cached = self._cache.get(ts_code, "fina_indicator")
+        if cached is not None:
+            logger.debug("Cache hit: %s/fina_indicator", ts_code)
+            return cached
         client = self._ensure_client()
         sec = self._bbg_security(ts_code)
 
         # Ensure financials are loaded
         client.fetch_all_financials(sec, years=self._years)
-        derived = client.calculate_all_derived_metrics()
+        metrics = client.calculate_all_derived_metrics()
 
-        if derived.empty:
+        # calculate_all_derived_metrics returns a dict of DataFrames
+        # Merge them into a single DataFrame on the "date" column
+        dfs = [df for df in metrics.values()
+               if isinstance(df, pd.DataFrame) and not df.empty]
+        if not dfs:
             return pd.DataFrame()
 
-        derived["ts_code"] = ts_code
-        if "date" in derived.columns:
-            derived = derived.rename(columns={"date": "end_date"})
-        return derived
+        merged = dfs[0]
+        for df in dfs[1:]:
+            if "date" in merged.columns and "date" in df.columns:
+                merged = merged.merge(df, on="date", how="outer")
+            else:
+                # Fallback: concat by position
+                for col in df.columns:
+                    if col not in merged.columns:
+                        merged[col] = df[col].values[:len(merged)]
+
+        merged["ts_code"] = ts_code
+        if "date" in merged.columns:
+            merged = merged.rename(columns={"date": "end_date"})
+        self._cache.put(ts_code, "fina_indicator", merged)
+        return merged
 
     def fetch_dividend(self, ts_code: str) -> pd.DataFrame:
+        cached = self._cache.get(ts_code, "dividend")
+        if cached is not None:
+            logger.debug("Cache hit: %s/dividend", ts_code)
+            return cached
         client = self._ensure_client()
         sec = self._bbg_security(ts_code)
         client.fetch_dividends(sec, years=self._years)
@@ -369,13 +460,22 @@ class BloombergProvider:
         raw["ts_code"] = ts_code
         if "date" in raw.columns:
             raw = raw.rename(columns={"date": "ex_date"})
+        self._cache.put(ts_code, "dividend", raw)
         return raw
 
     def fetch_top10_holders(self, ts_code: str) -> pd.DataFrame:
         """Bloomberg doesn't provide structured holder data via BDH.
         Return empty — agent can use web search if needed.
         """
-        return pd.DataFrame()
+        cached = self._cache.get(ts_code, "holders")
+        if cached is not None:
+            logger.debug("Cache hit: %s/holders", ts_code)
+            return cached
+        # No Bloomberg source for holders; cache the empty result to
+        # avoid repeated lookups within the TTL window.
+        out = pd.DataFrame()
+        self._cache.put(ts_code, "holders", out)
+        return out
 
     # ---- EDGAR filing date integration ----
 

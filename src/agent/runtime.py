@@ -32,6 +32,64 @@ logger = logging.getLogger(__name__)
 # 最大 tool_use 循环次数（防止无限循环）
 MAX_TOOL_ROUNDS = 15
 
+# Per-chapter timeout defaults (seconds)
+DEFAULT_CHAPTER_TIMEOUTS = {
+    "screening": 180,
+    "qualitative": 300,
+    "quantitative": 420,
+    "valuation": 420,
+    "synthesis": 240,
+    "default": 300,
+}
+
+
+def _chapter_category(chapter_id: str, chapter_name: str = "") -> str:
+    """Determine chapter category from id/name for timeout and trimming."""
+    name_lower = (chapter_id + " " + chapter_name).lower()
+    if any(k in name_lower for k in ("screen", "f1a", "quick")):
+        return "screening"
+    if any(k in name_lower for k in ("valuation", "synthesis", "ch07")):
+        return "valuation"
+    if any(k in name_lower for k in ("quant", "return", "coarse", "refined", "ch05", "ch06")):
+        return "quantitative"
+    if any(k in name_lower for k in ("moat", "business", "management", "external", "qual")):
+        return "qualitative"
+    return "default"
+
+
+def _trim_snapshot_md(snapshot_md: str, mode: str = "full") -> str:
+    """Trim snapshot markdown based on mode.
+
+    Modes:
+        full: Include everything (default for ch01, ch02)
+        financial: Strip Price History, Holders, Dividend History (for ch05-ch07)
+        minimal: Only Market Data summary + latest financials (for synthesis)
+    """
+    if mode == "full":
+        return snapshot_md
+
+    lines = snapshot_md.split("\n")
+    result = []
+    skip = False
+    skip_sections: set = set()
+
+    if mode == "financial":
+        skip_sections = {"Price History", "Top 10 Holders", "Dividend History",
+                         "Daily Price", "Trading History"}
+    elif mode == "minimal":
+        skip_sections = {"Price History", "Top 10 Holders", "Dividend History",
+                         "Daily Price", "Trading History", "Balance Sheet",
+                         "Cash Flow", "Financial Indicators"}
+
+    for line in lines:
+        if line.startswith("## ") or line.startswith("### "):
+            heading = line.lstrip("#").strip()
+            skip = any(s.lower() in heading.lower() for s in skip_sections)
+        if not skip:
+            result.append(line)
+
+    return "\n".join(result)
+
 
 # ==================== DAG 调度 ====================
 
@@ -134,6 +192,9 @@ def build_system_prompt(
     output_schema_text: str = "",
 ) -> str:
     """构建单章分析的 system prompt（算子驱动）"""
+    # Apply snapshot trimming based on chapter config
+    snapshot_mode = chapter.get("snapshot_mode", "full")
+    snapshot_md = _trim_snapshot_md(snapshot_md, mode=snapshot_mode)
     version_string = config.get_version_string()
     analyst_role = config.get_analyst_role()
 
@@ -180,7 +241,7 @@ def build_system_prompt(
 - 禁止使用任何该日期之后的信息
 - 通过工具获取的数据是完整的——未出现的信息代表在该时间点不可获取
 {blind_rules}{industry_hint}
-## 当前任务: 第{chapter['chapter']}章 — {chapter['title']}
+## 当前任务: {chapter.get('id', f"第{chapter.get('chapter', '?')}章")} — {chapter['title']}
 
 ## 分析框架
 
@@ -254,7 +315,8 @@ def build_synthesis_prompt(
     chapter_defs = config.get_chapter_defs()
     for ch_def in chapter_defs:
         ch_id = ch_def["id"]
-        prior_text += f"\n### 第{ch_def['chapter']}章: {ch_def['title']}\n"
+        ch_label = ch_def.get('id') or f"第{ch_def.get('chapter', '?')}章"
+        prior_text += f"\n### {ch_label}: {ch_def['title']}\n"
 
         # 优先使用完整分析文本（含推理过程和数据引用）
         if chapter_texts and ch_id in chapter_texts:
@@ -500,7 +562,11 @@ async def run_blind_analysis(
     # 1. 创建数据快照（或使用外部传入的）
     if snapshot is None:
         logger.info(f"Creating snapshot: {ts_code} @ {cutoff_date}")
-        snapshot = create_snapshot(ts_code, cutoff_date)
+        if config.is_us_market():
+            from src.data.snapshot_us import get_or_create_us_snapshot
+            snapshot = get_or_create_us_snapshot(ts_code, cutoff_date)
+        else:
+            snapshot = create_snapshot(ts_code, cutoff_date)
     else:
         logger.info(f"Using provided snapshot: {ts_code} @ {cutoff_date}")
     _progress("snapshot_done", data={"data_sources": snapshot.data_sources})
@@ -517,7 +583,11 @@ async def run_blind_analysis(
         raise RuntimeError("策略缺少章节定义 (chapters.yaml)")
 
     # 4. 预生成 snapshot markdown（注入 prompt，减少 tool 调用）
-    snap_md = snapshot_to_markdown(snapshot, blind_mode=blind_mode)
+    if config.is_us_market():
+        from src.data.snapshot_us import us_snapshot_to_markdown
+        snap_md = us_snapshot_to_markdown(snapshot, blind_mode=blind_mode)
+    else:
+        snap_md = snapshot_to_markdown(snapshot, blind_mode=blind_mode)
     logger.info(f"Snapshot markdown: {len(snap_md)} chars")
 
     # 5. 加载 output schema（如有）
@@ -529,6 +599,7 @@ async def run_blind_analysis(
 
     chapter_outputs: Dict[str, Any] = {}
     chapter_texts: Dict[str, str] = {}
+    chapter_timings: Dict[str, float] = {}
 
     logger.info(f"DAG batches: {[[ch for ch in b] for b in batches]}")
 
@@ -567,7 +638,8 @@ async def run_blind_analysis(
                     if dep_id in chapter_outputs and chapter_outputs[dep_id]:
                         dep_def = chapter_def_map.get(dep_id, {})
                         dep_title = dep_def.get("title", dep_id)
-                        prior_parts.append(f"### 第{dep_def.get('chapter', '?')}章: {dep_title}")
+                        dep_label = dep_def.get('id') or f"第{dep_def.get('chapter', '?')}章"
+                        prior_parts.append(f"### {dep_label}: {dep_title}")
                         output = chapter_outputs[dep_id]
                         prior_parts.append(f"```json\n{json.dumps(output, ensure_ascii=False, indent=2)}\n```")
                         prior_parts.append("")
@@ -575,25 +647,44 @@ async def run_blind_analysis(
 
             tasks.append((ch_id, system_prompt, prior_context))
 
-        # 并行执行同一批的章节
+        # Execute chapters — sequential for CLI backend (parallel subprocess
+        # deadlocks), parallel for API backend
         async def _run_chapter(ch_id, sys_prompt, prior_ctx):
             ch_def = chapter_def_map.get(ch_id, {})
-            _progress("chapter_start", ch_id, {"title": ch_def.get("title", ch_id)})
+            ch_name = ch_def.get("name", ch_def.get("title", ch_id))
+            _progress("chapter_start", ch_id, {"title": ch_name})
             logger.info(f"  Running chapter: {ch_id}")
-            text, structured = await run_agent_loop(
-                client, sys_prompt, sandbox, prior_ctx
-            )
-            return ch_id, text, structured
+
+            # Determine per-chapter timeout
+            category = _chapter_category(ch_id, ch_name)
+            ch_timeout = DEFAULT_CHAPTER_TIMEOUTS.get(category, DEFAULT_CHAPTER_TIMEOUTS["default"])
+
+            ch_start = time.time()
+            try:
+                text, structured = await asyncio.wait_for(
+                    run_agent_loop(client, sys_prompt, sandbox, prior_ctx),
+                    timeout=ch_timeout,
+                )
+            except asyncio.TimeoutError:
+                elapsed_ch = round(time.time() - ch_start, 1)
+                logger.warning(
+                    f"  Chapter {ch_id} timed out after {elapsed_ch}s (limit: {ch_timeout}s)"
+                )
+                text = f"[TIMEOUT] Chapter {ch_id} exceeded {ch_timeout}s limit"
+                structured = {"error": "timeout", "chapter": ch_id}
+            elapsed_ch = round(time.time() - ch_start, 1)
+            return ch_id, text, structured, elapsed_ch
 
         results = await asyncio.gather(
             *[_run_chapter(cid, sp, pc) for cid, sp, pc in tasks]
         )
 
-        for ch_id, text, structured in results:
+        for ch_id, text, structured, elapsed_ch in results:
             chapter_texts[ch_id] = text
             chapter_outputs[ch_id] = structured or {}
+            chapter_timings[ch_id] = elapsed_ch
             _progress("chapter_done", ch_id, structured or {})
-            logger.info(f"  Completed: {ch_id} ({'structured' if structured else 'text only'})")
+            logger.info(f"  Completed: {ch_id} ({'structured' if structured else 'text only'}) [{elapsed_ch}s]")
 
         # --- US-QY Veto Gate Check (between batches) ---
         veto_triggered, veto_reason = check_veto_gates(chapter_outputs)
@@ -629,6 +720,7 @@ async def run_blind_analysis(
             "model": client.config.model,
             "elapsed_seconds": round(elapsed, 1),
             "chapters_completed": len(chapter_outputs),
+            "chapter_timings": chapter_timings,
         },
     }
 

@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import pickle
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +58,12 @@ class USStockSnapshot:
     fina_indicator: pd.DataFrame = field(default_factory=pd.DataFrame)
     dividend: pd.DataFrame = field(default_factory=pd.DataFrame)
     holders: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+    # SEC footnotes
+    footnotes_md: str = ""
+
+    # Pre-computed quantitative metrics (avoid LLM recalculation)
+    computed_metrics: dict = field(default_factory=dict)
 
     # Metadata
     latest_report_period: str = ""
@@ -151,6 +159,27 @@ def create_us_snapshot(
     except Exception:
         pass
 
+    # --- Market data ---
+    try:
+        if hasattr(provider, "fetch_market_snapshot"):
+            mkt = provider.fetch_market_snapshot(ts_code)
+            if not mkt.empty:
+                snap.daily_indicators = mkt
+                snap.data_sources.append("market_data")
+    except Exception as e:
+        logger.warning("Failed to fetch market data for %s: %s", ts_code, e)
+
+    try:
+        if hasattr(provider, "fetch_price_history"):
+            prices = provider.fetch_price_history(ts_code, years=2)
+            if not prices.empty:
+                if "trade_date" in prices.columns:
+                    prices = prices[prices["trade_date"] <= cutoff_date]
+                snap.price_history = prices
+                snap.data_sources.append("price_history")
+    except Exception as e:
+        logger.warning("Failed to fetch price history for %s: %s", ts_code, e)
+
     # Latest report period
     if not snap.income.empty and "end_date" in snap.income.columns:
         snap.latest_report_period = snap.income["end_date"].max()
@@ -162,6 +191,287 @@ def create_us_snapshot(
         snap.warnings.append("No balance sheet data")
     if snap.cashflow.empty:
         snap.warnings.append("No cash flow data")
+
+    # EDGAR footnotes (optional, non-blocking)
+    try:
+        from .bloomberg.edgar import get_footnotes_markdown
+        snap.footnotes_md = get_footnotes_markdown(ts_code)
+        if snap.footnotes_md:
+            snap.data_sources.append("edgar_footnotes")
+    except Exception as e:
+        logger.warning("EDGAR footnotes unavailable for %s: %s", ts_code, e)
+
+    # Pre-compute quantitative metrics (GG, owner earnings, etc.)
+    snap.computed_metrics = _compute_quantitative_metrics(snap)
+    if snap.computed_metrics:
+        snap.data_sources.append("computed_metrics")
+
+    return snap
+
+
+def _compute_quantitative_metrics(snap: USStockSnapshot) -> dict:
+    """Pre-compute GG, owner earnings, and related metrics from Bloomberg data.
+
+    These are pure arithmetic — no LLM judgment needed.
+    """
+    import numpy as np
+
+    metrics = {}
+    cf = snap.cashflow
+    inc = snap.income
+    bs = snap.balancesheet
+    mkt = snap.daily_indicators
+
+    if cf.empty or inc.empty:
+        return metrics
+
+    # Sort by end_date descending
+    date_col = "end_date"
+    if date_col not in cf.columns:
+        return metrics
+    cf = cf.sort_values(date_col, ascending=False)
+    inc = inc.sort_values(date_col, ascending=False)
+    if not bs.empty and date_col in bs.columns:
+        bs = bs.sort_values(date_col, ascending=False)
+
+    # --- Helper: safe float extraction ---
+    def _val(df, col, row=0):
+        if col in df.columns and len(df) > row:
+            v = df.iloc[row].get(col)
+            if pd.notna(v):
+                return float(v)
+        return None
+
+    def _vals(df, col, n=5):
+        """Get up to n years of values."""
+        if col not in df.columns:
+            return []
+        return [float(v) for v in df[col].head(n) if pd.notna(v)]
+
+    # --- Market cap (normalized to millions) ---
+    market_cap = None
+    if not mkt.empty:
+        mc = _val(mkt, "total_mv") or _val(mkt, "market_cap")
+        if mc and mc > 0:
+            # Normalize: if value > 1B, it's in raw USD → convert to millions
+            if mc > 1_000_000:
+                mc = mc / 1e6
+            market_cap = mc
+
+    if not market_cap:
+        # Fallback: price × shares (shares_outstanding is in millions)
+        if not snap.price_history.empty and not mkt.empty:
+            price = _val(snap.price_history.sort_values(
+                "trade_date" if "trade_date" in snap.price_history.columns else "date",
+                ascending=False), "close")
+            shares = _val(mkt, "shares_outstanding")
+            if price and shares:
+                market_cap = price * shares  # price × millions of shares = millions USD
+
+    metrics["market_cap_m"] = market_cap
+
+    # --- Core cash flow components (latest year) ---
+    ocf = _val(cf, "ocf")
+    capex = _val(cf, "capex")
+    da = _val(cf, "dep_amort")
+    sbc = _val(cf, "sbc")
+    divs = _val(cf, "dividends_paid")
+    buybacks = _val(cf, "share_repurchases")
+    ni = _val(inc, "net_income")
+    revenue = _val(inc, "revenue")
+    ebitda = _val(inc, "ebitda")
+    interest = _val(inc, "interest_expense")
+
+    # Make capex/divs positive for calculations (Bloomberg reports as negative)
+    if capex and capex < 0:
+        capex = abs(capex)
+    if divs and divs < 0:
+        divs = abs(divs)
+    if buybacks and buybacks < 0:
+        buybacks = abs(buybacks)
+
+    metrics["ocf"] = ocf
+    metrics["capex"] = capex
+    metrics["da"] = da
+    metrics["sbc"] = sbc
+    metrics["dividends_paid"] = divs
+    metrics["buybacks"] = buybacks
+    metrics["net_income"] = ni
+    metrics["revenue"] = revenue
+    metrics["ebitda"] = ebitda
+
+    # --- Maintenance CapEx (conservative: D&A × 0.9) ---
+    maint_capex = None
+    if da:
+        maint_capex = da * 0.9  # Conservative default coefficient
+    elif capex:
+        maint_capex = capex * 0.7  # Fallback if no D&A
+    metrics["maint_capex"] = maint_capex
+    metrics["maint_capex_coeff"] = 0.9
+
+    # --- Owner Earnings ---
+    if ni is not None and da is not None and maint_capex is not None:
+        oe = ni + da - maint_capex
+        metrics["owner_earnings"] = round(oe, 1)
+        if sbc and ni and abs(ni) > 0 and sbc / abs(ni) > 0.20:
+            metrics["owner_earnings_sbc_adj"] = round(oe - sbc, 1)
+            metrics["sbc_material"] = True
+        else:
+            metrics["owner_earnings_sbc_adj"] = round(oe - (sbc or 0), 1)
+            metrics["sbc_material"] = False
+
+    # --- FCF ---
+    if ocf is not None and capex is not None:
+        metrics["free_cash_flow"] = round(ocf - capex, 1)
+
+    # --- Coarse Return R ---
+    if ni is not None and market_cap and market_cap > 0:
+        # Payout ratio: 3-year average
+        ni_vals = _vals(inc, "net_income", 3)
+        div_vals = _vals(cf, "dividends_paid", 3)
+        div_vals = [abs(d) for d in div_vals if d]
+
+        if ni_vals and div_vals:
+            avg_payout = sum(div_vals) / max(sum(abs(n) for n in ni_vals if n > 0), 1)
+            avg_payout = min(avg_payout, 1.0)  # Cap at 100%
+        else:
+            avg_payout = 0.30  # Default 30%
+
+        # 3-year average buybacks
+        bb_vals = _vals(cf, "share_repurchases", 3)
+        bb_vals = [abs(b) for b in bb_vals if b]
+        avg_bb = sum(bb_vals) / max(len(bb_vals), 1) if bb_vals else 0
+
+        tax_q = 0.15  # US qualified dividend tax
+        R = (ni * avg_payout * (1 - tax_q) + avg_bb) / market_cap * 100
+        metrics["coarse_return_R"] = round(R, 2)
+        metrics["payout_ratio_avg"] = round(avg_payout * 100, 1)
+        metrics["avg_buybacks_3y"] = round(avg_bb, 1)
+
+        # SBC-adjusted R
+        ni_adj = ni - (sbc or 0)
+        R_adj = (ni_adj * avg_payout * (1 - tax_q) + avg_bb) / market_cap * 100
+        metrics["coarse_return_R_adj"] = round(R_adj, 2)
+
+    # --- Refined Return GG (AA / Market Cap) ---
+    if ocf is not None and maint_capex is not None and market_cap and market_cap > 0:
+        # AA = OCF - Maintenance CapEx
+        aa = ocf - maint_capex
+        metrics["aa_baseline"] = round(aa, 1)
+
+        # GG = AA / Market Cap
+        gg = aa / market_cap * 100
+        metrics["gg_primary"] = round(gg, 2)
+
+        # SBC-adjusted
+        aa_ex_sbc = aa - (sbc or 0)
+        gg_ex_sbc = aa_ex_sbc / market_cap * 100
+        metrics["aa_ex_sbc"] = round(aa_ex_sbc, 1)
+        metrics["gg_ex_sbc"] = round(gg_ex_sbc, 2)
+
+        # Safety margin vs Threshold II (7.3%)
+        threshold_ii = 7.3
+        metrics["gg_vs_threshold"] = round(gg - threshold_ii, 2)
+
+    # --- Net Shareholder Return ---
+    if buybacks is not None or divs is not None:
+        nsr = (buybacks or 0) + (divs or 0) - (sbc or 0)
+        metrics["net_shareholder_return"] = round(nsr, 1)
+
+    # --- FCF history (for distribution capacity check) ---
+    fcf_history = []
+    ocf_vals = _vals(cf, "ocf", 5)
+    capex_vals = _vals(cf, "capex", 5)
+    for o, c in zip(ocf_vals, capex_vals):
+        fcf_history.append(round(o - abs(c), 1))
+    metrics["fcf_history"] = fcf_history
+    metrics["fcf_positive_years"] = sum(1 for f in fcf_history if f > 0)
+
+    # --- Debt metrics ---
+    if not bs.empty:
+        total_equity = _val(bs, "total_equity")
+        lt_debt = _val(bs, "lt_debt")
+        st_debt = _val(bs, "st_debt")
+        cash = _val(bs, "cash_and_equivalents")
+        total_debt = (lt_debt or 0) + (st_debt or 0)
+        metrics["total_debt"] = round(total_debt, 1)
+        metrics["net_debt"] = round(total_debt - (cash or 0), 1)
+        if total_equity and total_equity > 0:
+            metrics["debt_to_equity"] = round(total_debt / total_equity, 2)
+        # Interest coverage
+        if interest and interest > 0 and ebitda:
+            metrics["interest_coverage"] = round(ebitda / interest, 2)
+
+    # --- Graham Number ---
+    if ni is not None and not bs.empty:
+        shares = None
+        if not mkt.empty:
+            shares = _val(mkt, "shares_outstanding")
+        total_equity = _val(bs, "total_equity")
+        if shares and shares > 0 and total_equity and total_equity > 0 and ni > 0:
+            eps = ni / shares
+            bvps = total_equity / shares
+            if eps > 0 and bvps > 0:
+                metrics["graham_number"] = round((22.5 * eps * bvps) ** 0.5, 2)
+                metrics["eps_ttm"] = round(eps, 2)
+                metrics["bvps"] = round(bvps, 2)
+
+    # --- Gross margin (for screening) ---
+    gp_vals = _vals(inc, "gross_profit", 5)
+    rev_vals = _vals(inc, "revenue", 5)
+    if gp_vals and rev_vals:
+        margins = [g / r * 100 for g, r in zip(gp_vals, rev_vals) if r and r > 0]
+        if margins:
+            metrics["gross_margin_latest"] = round(margins[0], 1)
+            metrics["gross_margin_avg_3y"] = round(sum(margins[:3]) / len(margins[:3]), 1)
+
+    return metrics
+
+
+def get_or_create_us_snapshot(
+    ts_code: str,
+    cutoff_date: str,
+    max_age_hours: int = 24,
+    **kwargs,
+) -> USStockSnapshot:
+    """Load cached snapshot if fresh, else create and cache.
+
+    Args:
+        ts_code: Ticker symbol (e.g., 'AAPL')
+        cutoff_date: Cutoff date 'YYYY-MM-DD'
+        max_age_hours: Maximum cache age in hours (default 24)
+        **kwargs: Passed through to create_us_snapshot
+
+    Returns:
+        USStockSnapshot (from cache or freshly created)
+    """
+    cache_dir = Path("data") / "snapshots" / "us"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_file = cache_dir / f"{ts_code}_{cutoff_date}.pickle"
+
+    if cache_file.exists():
+        age_hours = (time.time() - cache_file.stat().st_mtime) / 3600
+        if age_hours < max_age_hours:
+            logger.info(
+                "Loading cached snapshot: %s @ %s (%.1fh old)",
+                ts_code, cutoff_date, age_hours,
+            )
+            try:
+                with open(cache_file, "rb") as f:
+                    return pickle.load(f)
+            except Exception as e:
+                logger.warning("Failed to load cached snapshot, recreating: %s", e)
+
+    # Create fresh
+    snap = create_us_snapshot(ts_code, cutoff_date, **kwargs)
+
+    # Cache
+    try:
+        with open(cache_file, "wb") as f:
+            pickle.dump(snap, f)
+        logger.info("Cached snapshot: %s @ %s", ts_code, cutoff_date)
+    except Exception as e:
+        logger.warning("Failed to cache snapshot: %s", e)
 
     return snap
 
@@ -219,6 +529,76 @@ def us_snapshot_to_markdown(snap: USStockSnapshot, blind_mode: bool = False) -> 
     if snap.warnings:
         lines.append(f"**Warnings**: {'; '.join(snap.warnings)}")
     lines.append("")
+
+    # Market Data: price/market cap from price_history on cutoff date (accurate),
+    # ratios (PE, PB, etc.) from reference data (Bloomberg point-in-time)
+    if not snap.daily_indicators.empty or not snap.price_history.empty:
+        lines.append("## Market Data (as of cutoff date)")
+
+        # Get closing price on cutoff date from price history (authoritative)
+        cutoff_close = None
+        shares_out = None
+        if not snap.price_history.empty:
+            date_col = "trade_date" if "trade_date" in snap.price_history.columns else "date"
+            ph_sorted = snap.price_history.sort_values(date_col, ascending=False)
+            # Use most recent row at or before cutoff
+            cutoff_close = float(ph_sorted["close"].iloc[0])
+
+        # Shares outstanding from reference data
+        ref_row = snap.daily_indicators.iloc[0] if not snap.daily_indicators.empty else None
+        if ref_row is not None:
+            so = ref_row.get("shares_outstanding")
+            if pd.notna(so):
+                shares_out = float(so)
+
+        if cutoff_close is not None:
+            lines.append(f"- **Last Price ($)**: {cutoff_close:,.2f}")
+            if shares_out is not None:
+                mktcap_m = cutoff_close * shares_out  # shares in millions
+                lines.append(f"- **Market Cap ($M)**: {mktcap_m:,.0f}")
+
+        # Ratios from reference data (less time-sensitive)
+        if ref_row is not None:
+            for col, label, fmt in [
+                ("pe_ttm", "P/E (TTM)", ",.2f"),
+                ("pb", "P/B", ",.2f"),
+                ("eps_ttm", "EPS (TTM, $)", ",.2f"),
+                ("dv_ttm", "Dividend Yield (%)", ",.2f"),
+                ("roe", "ROE (%)", ",.2f"),
+                ("roa", "ROA (%)", ",.2f"),
+                ("shares_outstanding", "Shares Outstanding (M)", ",.2f"),
+            ]:
+                val = ref_row.get(col)
+                if pd.notna(val):
+                    lines.append(f"- **{label}**: {float(val):{fmt}}")
+        lines.append("")
+
+    # Price History Summary
+    if not snap.price_history.empty:
+        ph = snap.price_history.sort_values(
+            "trade_date" if "trade_date" in snap.price_history.columns else "date",
+            ascending=False,
+        )
+        lines.append("## Price History (recent 60 trading days)")
+        date_col = "trade_date" if "trade_date" in ph.columns else "date"
+        recent = ph.head(60)
+        lines.append(f"| Date | Close | Volume |")
+        lines.append(f"|------|------:|-------:|")
+        for _, r in recent.head(20).iterrows():
+            d = r.get(date_col, "")
+            c = r.get("close", 0)
+            v = r.get("volume", 0)
+            lines.append(f"| {d} | {c:,.2f} | {v:,.0f} |")
+        if len(recent) > 20:
+            lines.append(f"| ... | ({len(recent)-20} more rows) | ... |")
+
+        # 52-week high/low
+        if "close" in ph.columns:
+            hi = ph["close"].max()
+            lo = ph["close"].min()
+            last = ph["close"].iloc[0]
+            lines.append(f"\n**52-Week Range**: ${lo:,.2f} - ${hi:,.2f} (Current: ${last:,.2f})")
+        lines.append("")
 
     # Income Statement
     if not snap.income.empty:
@@ -293,6 +673,73 @@ def us_snapshot_to_markdown(snap: USStockSnapshot, blind_mode: bool = False) -> 
             lines.append(f"| {row.get('ex_date', 'N/A')} | ${row.get('amount', 0):.4f} |")
         lines.append("")
 
+    # Pre-Computed Quantitative Metrics
+    if snap.computed_metrics:
+        m = snap.computed_metrics
+        lines.append("## Pre-Computed Quantitative Metrics")
+        lines.append("")
+        lines.append("These are calculated from Bloomberg data. Use directly — do not recalculate.")
+        lines.append("")
+
+        if m.get("market_cap_m"):
+            lines.append(f"**Market Cap**: ${m['market_cap_m']:,.0f}M")
+        lines.append("")
+
+        # Owner Earnings
+        if m.get("owner_earnings") is not None:
+            lines.append("### Owner Earnings")
+            lines.append(f"- Owner Earnings: ${m['owner_earnings']:,.1f}M")
+            lines.append(f"- Owner Earnings (SBC-adj): ${m.get('owner_earnings_sbc_adj', 0):,.1f}M")
+            lines.append(f"- Maintenance CapEx: ${m.get('maint_capex', 0):,.1f}M (D&A × {m.get('maint_capex_coeff', 0.9)})")
+            lines.append(f"- SBC Material: {m.get('sbc_material', False)}")
+            lines.append("")
+
+        # Returns
+        if m.get("coarse_return_R") is not None:
+            lines.append("### Return Rates")
+            lines.append(f"- **Coarse Return R**: {m['coarse_return_R']:.2f}%")
+            lines.append(f"- **Coarse Return R (SBC-adj)**: {m.get('coarse_return_R_adj', 0):.2f}%")
+            lines.append(f"- Payout Ratio (3yr avg): {m.get('payout_ratio_avg', 0):.1f}%")
+            lines.append(f"- Avg Buybacks (3yr): ${m.get('avg_buybacks_3y', 0):,.1f}M")
+            lines.append("")
+
+        if m.get("gg_primary") is not None:
+            lines.append(f"- **Refined GG**: {m['gg_primary']:.2f}%")
+            lines.append(f"- **GG (ex-SBC)**: {m.get('gg_ex_sbc', 0):.2f}%")
+            lines.append(f"- **GG vs Threshold II (7.3%)**: {m.get('gg_vs_threshold', 0):+.2f}pp")
+            lines.append(f"- AA Baseline: ${m.get('aa_baseline', 0):,.1f}M")
+            lines.append(f"- AA (ex-SBC): ${m.get('aa_ex_sbc', 0):,.1f}M")
+            lines.append("")
+
+        # Shareholder Returns
+        if m.get("net_shareholder_return") is not None:
+            lines.append("### Shareholder Returns")
+            lines.append(f"- Net Shareholder Return: ${m['net_shareholder_return']:,.1f}M (Buybacks + Divs - SBC)")
+            lines.append(f"- FCF History: {m.get('fcf_history', [])}")
+            lines.append(f"- FCF Positive Years: {m.get('fcf_positive_years', 0)}/5")
+            lines.append("")
+
+        # Debt & Leverage
+        if m.get("total_debt") is not None:
+            lines.append("### Debt & Leverage")
+            lines.append(f"- Total Debt: ${m['total_debt']:,.1f}M")
+            lines.append(f"- Net Debt: ${m.get('net_debt', 0):,.1f}M")
+            if m.get("debt_to_equity") is not None:
+                lines.append(f"- **Debt/Equity**: {m['debt_to_equity']:.2f}")
+            if m.get("interest_coverage") is not None:
+                lines.append(f"- Interest Coverage: {m['interest_coverage']:.1f}x")
+            lines.append("")
+
+        # Graham Number
+        if m.get("graham_number") is not None:
+            lines.append("### Graham Number")
+            lines.append(f"- Graham Number: ${m['graham_number']:.2f}")
+            lines.append(f"- EPS (TTM): ${m.get('eps_ttm', 0):.2f}")
+            lines.append(f"- BVPS: ${m.get('bvps', 0):.2f}")
+            lines.append("")
+
+        lines.append("")
+
     # Institutional Holders
     if not snap.holders.empty:
         lines.append("## Institutional Holders")
@@ -313,6 +760,12 @@ def us_snapshot_to_markdown(snap: USStockSnapshot, blind_mode: bool = False) -> 
                 shares = row.get("Shares", row.get("hold_amount", 0))
                 lines.append(f"| {i} | {name} | {shares:,.0f} |")
         lines.append("")
+
+    # SEC Filing Footnotes
+    if snap.footnotes_md:
+        lines.append("")
+        lines.append("## SEC Filing Footnotes (10-K)")
+        lines.append(snap.footnotes_md)
 
     # Time boundary declaration
     lines.append("---")

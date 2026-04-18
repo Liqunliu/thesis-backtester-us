@@ -112,27 +112,21 @@ framework:
         - mda_interpretation
 
     ch05:
-      name: "Quantitative — Coarse Return (B1)"
+      name: "Quantitative — Distribution & Return (B)"
       depends: [ch01]
+      snapshot_mode: financial
       operators:
         - owner_earnings_us
         - distribution_capacity
         - coarse_penetration_return
 
-    ch06:
-      name: "Quantitative — Refined Return (B2+B3)"
-      depends: [ch05]
-      operators:
-        - cash_revenue_reconstruction
-        - non_recurring_classification
-        - operating_outflows
-        - gaap_audit
-        - refined_return_aa
-        - sensitivity_cross_validation
+    # ch06 removed: GG/AA/owner earnings now pre-computed in snapshot
+    # (see "Pre-Computed Quantitative Metrics" section in snapshot markdown)
 
-    ch07:
+    ch06:
       name: "Valuation & Synthesis (C)"
-      depends: [ch04, ch05, ch06]
+      depends: [ch04, ch05]
+      snapshot_mode: financial
       operators:
         - valuation_synthesis_us
 
@@ -152,13 +146,14 @@ synthesis:
       instruction: |
         For PASS stocks, compute sub-scores:
         F1 score (0-25): Asset quality grade A=25, B=20, C=15, D=10
-        F2 score (0-25): Based on coarse return R vs thresholds
+        F2 score (0-25): Based on coarse return R vs thresholds (use pre-computed R from snapshot)
           R > 10% = 25, R > 7.3% = 20, R > 5% = 15, R > 4.3% = 10
-        F3 score (0-25): Based on refined GG vs Threshold II + credibility
-          GG > 10% + HIGH credibility = 25, GG > 7.3% + MEDIUM = 15
+        F3 score (0-25): Based on pre-computed GG from snapshot vs Threshold II
+          GG > 10% = 25, GG > 7.3% = 20, GG > 5% = 15
         F4 score (0-25): Based on safety margin + value trap count
           margin > 3pp + 0 traps = 25, margin > 1pp + <=1 trap = 15
         Total = F1 + F2 + F3 + F4
+        NOTE: GG, R, AA, Graham Number are pre-computed in the snapshot. Use them directly.
 
     - step: Consistency Adjudication
       instruction: |
@@ -229,6 +224,6 @@ backtest:
 
 # --- LLM ---
 llm:
-  model: ${LLM_MODEL:-claude-sonnet-4-20250514}
+  model: ${LLM_MODEL:-claude-sonnet-4-6}
   max_tokens: 8192
   temperature: 0.1

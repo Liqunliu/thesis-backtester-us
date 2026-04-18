@@ -1,0 +1,201 @@
+meta:
+  name: US Cyclical Trough Buying
+  version: "1.0"
+  description: >
+    Cyclical trough buying strategy for US equities. Identifies cyclical stocks
+    at or near cycle troughs using normalized (mid-cycle) valuations. 4-factor
+    framework: C1 Survival Gate, C2 Cycle Phase Detection, C3 Normalized Valuation,
+    C4 Cyclical Synthesis. Bloomberg preferred, yfinance fallback.
+  market: US
+  provider: bloomberg  # bloomberg | yfinance
+
+paths:
+  operators_dir: operators/us_cyclical
+  factors_dir: factors/us
+
+# --- Screening ---
+screening:
+  include_industries:
+    - Oil & Gas
+    - Semiconductor
+    - Steel
+    - Aluminum
+    - Mining
+    - Chemicals
+    - Auto Manufacturers
+    - Airlines
+    - Shipping
+    - Construction
+    - Paper & Forest Products
+    - Copper
+  filters:
+    - field: market_cap
+      min: 1000             # $1B minimum (millions USD)
+
+# --- Chapter DAG ---
+# Linear dependency chain: C1 -> C2 -> C3 -> Synthesis
+framework:
+  chapters:
+    ch01:
+      name: "Survival & Quality Gate (C1)"
+      depends: []
+      operators:
+        - factor_c1_survival
+
+    ch02:
+      name: "Cycle Phase Detection (C2)"
+      depends: [ch01]
+      operators:
+        - factor_c2_cycle_phase
+
+    ch03:
+      name: "Normalized Valuation & Entry (C3)"
+      depends: [ch01, ch02]
+      snapshot_mode: financial
+      operators:
+        - factor_c3_normalized_value
+
+    ch04:
+      name: "Cyclical Synthesis & Recommendation"
+      depends: [ch03]
+      operators:
+        - cyclical_synthesis
+
+# --- Synthesis ---
+synthesis:
+  thinking_steps:
+    - step: C1 Survival Gate Check
+      instruction: |
+        Check all C1 survival gates in sequence:
+        1. Current Ratio >= 1.0
+        2. Interest Coverage >= 1.5x (using trough EBITDA)
+        3. Net Debt / Mid-Cycle EBITDA <= 3.0x
+        4. Cash runway >= 18 months at trough burn rate
+        5. Cyclicality confirmation: CV(Revenue) >= 15% OR CV(EBITDA) >= 30%
+        If ANY gate fails -> VETO, exclude from cyclical strategy.
+        If stock is not cyclical -> redirect to Quality Yield framework.
+
+    - step: Cycle Phase Assessment
+      instruction: |
+        Evaluate the 4-component composite cycle score:
+        - Company fundamentals (40%): revenue percentile, margin percentile, capex trend
+        - Sector indicators (35%): commodity prices, sector index levels vs 5yr range
+        - Macro overlay (15%): yield curve, credit spreads, interest rate environment
+        - Price position (10%): stock price vs 5yr range
+        Map composite score to phase: >= 0.80 Deep Trough, >= 0.65 Early Recovery,
+        >= 0.40 Mid-Cycle, >= 0.20 Late Cycle, < 0.20 Peak.
+        Cross-validate: Company vs Sector divergence > 2 phases = reduced confidence.
+
+    - step: Normalized Valuation Check
+      instruction: |
+        Compute Normalized GG using medians to strip cyclical extremes:
+        - OCF: 5-year median
+        - CapEx: 5-year median
+        - Dividends, Buybacks, SBC: 3-year average
+        Normalized GG = (median_OCF - median_CapEx + avg_Buybacks - avg_Dividends - avg_SBC) / Market_Cap
+        Compare vs Threshold II (7.3%). Compute discount to mid-cycle fair value.
+        Entry requires: Phase 1 or 2 + Normalized GG >= 7.3% + C1 PASS.
+
+    - step: Final Recommendation
+      instruction: |
+        Apply phase-based position sizing and risk limits:
+        - Phase 1 (Deep Trough): BUY max conviction, up to 15% single position
+        - Phase 2 (Early Recovery): BUY standard, up to 10% single position
+        - Phase 3 (Mid-Cycle): HOLD only, no new positions
+        - Phase 4 (Late Cycle): REDUCE, trim 50%
+        - Phase 5 (Peak): SELL/AVOID
+        Enforce portfolio risk limits: max sector 35%, max commodity group 30%,
+        min cash 20%, portfolio stop -25%.
+        Exit triggers: Phase 5 OR 3-year time stop.
+
+  scoring:
+    anchors:
+      - range: "85-100"
+        profile: "Phase 1 + Normalized GG >> Threshold II + all survival gates PASS + strong sector confirmation"
+      - range: "70-84"
+        profile: "Phase 1-2 + Normalized GG > Threshold II + survival PASS -> BUY"
+      - range: "50-69"
+        profile: "Phase 2-3 + Normalized GG near threshold -> HOLD/WATCH"
+      - range: "30-49"
+        profile: "Phase 3-4 + GG below threshold or weak sector -> WATCH/REDUCE"
+      - range: "0-29"
+        profile: "Phase 5 or survival VETO or non-cyclical -> SELL/AVOID"
+
+  decision:
+    buy_threshold: 70
+    hold_range: [50, 69]
+    watch_range: [30, 49]
+    avoid_threshold: 29
+
+# --- US Market Parameters ---
+parameters:
+  risk_free_rate: 0.043        # Rf = 4.3% (US 10Y Treasury)
+  normalized_gg_threshold: 0.073  # max(5%, Rf + 3%) = 7.3%
+  currency: USD
+  amounts_unit: millions
+
+  # C2 composite score weights
+  weight_company: 0.40
+  weight_sector: 0.35
+  weight_macro: 0.15
+  weight_price: 0.10
+
+  # C2 phase thresholds (composite score boundaries)
+  phase_deep_trough: 0.80     # >= 0.80 -> Phase 1 (Deep Trough)
+  phase_early_recovery: 0.65  # >= 0.65 -> Phase 2 (Early Recovery)
+  phase_mid_cycle: 0.40       # >= 0.40 -> Phase 3 (Mid-Cycle)
+  phase_late_cycle: 0.20      # >= 0.20 -> Phase 4 (Late Cycle)
+  # < 0.20 -> Phase 5 (Peak)
+
+  # C1 survival thresholds
+  min_current_ratio: 1.0
+  min_interest_coverage: 1.5
+  max_net_debt_mid_ebitda: 3.0
+  min_cash_runway_months: 18
+  min_revenue_cv: 0.15
+  min_ebitda_cv: 0.30
+
+  # C3 valuation thresholds
+  min_discount_to_midcycle: 0.15
+
+  # Risk management
+  max_single_position: 0.15   # 15% (lower than QY's 25% for higher-risk cyclicals)
+  max_sector: 0.35
+  max_commodity_group: 0.30
+  min_cash: 0.20
+  portfolio_stop_loss: -0.25
+
+# --- Backtest ---
+backtest:
+  start_date: "2020-06-30"
+  end_date: "2025-12-31"
+  interval: "6m"
+  top_n: 30
+  concurrency: 3
+  forward_windows: [30, 90, 180, 365]
+  benchmark: SPY
+  universe: sp500
+  benchmarks:
+    - name: SPY
+      type: index
+      ticker: SPY
+    - name: Screen Pool
+      type: equal_weight
+      source: screen
+    - name: PASS Pool
+      type: equal_weight
+      source: pass
+    - name: BUY Signal
+      type: equal_weight
+      source: buy
+      threshold: 70
+    - name: Top 5
+      type: top_n
+      source: score
+      n: 5
+
+# --- LLM ---
+llm:
+  model: ${LLM_MODEL:-claude-sonnet-4-6}
+  max_tokens: 8192
+  temperature: 0.1

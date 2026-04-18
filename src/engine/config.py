@@ -203,6 +203,14 @@ class StrategyConfig:
         """获取排除规则"""
         return self.get_screening_config().get('exclude', [])
 
+    def get_include_rules(self) -> List[str]:
+        """Get industry include list for filtering universe DOWN to matching industries.
+
+        Returns a list of industry name substrings. If non-empty, only stocks
+        whose industry matches at least one entry are kept.
+        """
+        return self.get_screening_config().get('include_industries', [])
+
     def get_industry_cap(self) -> int:
         """获取单行业入选上限，0 表示不限"""
         return self.get_screening_config().get('industry_cap', 0)

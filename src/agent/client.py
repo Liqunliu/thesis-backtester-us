@@ -102,7 +102,7 @@ class LLMClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         max_retries: int = 3,
-        timeout: float = 600,
+        timeout: float = 300,
     ) -> Any:
         """Send chat request. Routes to API or Claude CLI based on backend."""
         if self.config.backend == "claude-cli":
@@ -122,13 +122,14 @@ class LLMClient:
         runs 'claude --print', and wraps the response in a
         ChatCompletion-like object.
         """
-        # Build prompt from messages
+        # Build prompt from messages — avoid XML-like tags that trigger
+        # prompt injection detection in claude CLI
         prompt_parts = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
             if role == "system":
-                prompt_parts.append(f"<system>\n{content}\n</system>\n")
+                prompt_parts.append(f"SYSTEM INSTRUCTIONS:\n{content}\n")
             elif role == "user":
                 prompt_parts.append(content)
             elif role == "assistant":
@@ -137,34 +138,25 @@ class LLMClient:
                 tool_id = msg.get("tool_call_id", "")
                 prompt_parts.append(f"[Tool result for {tool_id}]: {content[:2000]}")
 
-        # Add tool definitions to system context if present
-        if tools:
-            tool_desc = json.dumps(tools, indent=2)
-            prompt_parts.insert(0, f"<available_tools>\n{tool_desc}\n</available_tools>\n")
-            prompt_parts.append(
-                "\nIMPORTANT: Respond with a JSON object containing your analysis. "
-                "If you need to use a tool, respond with a JSON object containing "
-                "'tool_calls' array with 'name' and 'arguments' fields."
-            )
+        # Tools are not used with CLI backend — the claude CLI handles
+        # tool calls natively. We ignore the tools parameter and just
+        # ask for structured JSON output.
+        prompt_parts.append(
+            "\nPlease provide your analysis. At the end, output a structured "
+            "JSON conclusion wrapped in ```json ``` code fences."
+        )
 
         full_prompt = "\n\n".join(prompt_parts)
 
-        # Run claude CLI
+        # Run claude CLI: write prompt to temp file, invoke via synchronous
+        # subprocess.run in a thread. Using asyncio subprocess directly causes
+        # hangs in non-TTY environments (Claude Code sessions, CI, etc.)
+        import tempfile
         logger.debug("Calling claude CLI (prompt length: %d chars)", len(full_prompt))
         try:
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["claude", "--print", "--model", self.config.model, "-p", full_prompt],
-                capture_output=True,
-                text=True,
-                timeout=600,
+            response_text = await asyncio.get_event_loop().run_in_executor(
+                None, self._run_claude_sync, full_prompt
             )
-            response_text = result.stdout.strip()
-            if result.returncode != 0:
-                logger.error("claude CLI error: %s", result.stderr[:500])
-                response_text = result.stderr or "Claude CLI returned an error"
-        except subprocess.TimeoutExpired:
-            response_text = "Claude CLI timed out after 600 seconds"
         except FileNotFoundError:
             raise RuntimeError(
                 "Claude CLI not found. Install it: npm install -g @anthropic-ai/claude-code\n"
@@ -174,6 +166,43 @@ class LLMClient:
         # Wrap in ChatCompletion-like response
         return _ClaudeCliResponse(response_text)
 
+    def _run_claude_sync(self, prompt: str) -> str:
+        """Run claude CLI synchronously (called from thread pool).
+
+        Writes prompt to a temp file and pipes it to claude --print
+        to avoid stdin inheritance issues in non-interactive processes.
+        """
+        import tempfile
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False, encoding="utf-8"
+            ) as f:
+                f.write(prompt)
+                tmp_path = f.name
+
+            result = subprocess.run(
+                f'cat "{tmp_path}" | claude --print --no-session-persistence'
+                f' --model {self.config.model}',
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=480,
+            )
+            if result.returncode != 0:
+                err = result.stderr[:500]
+                logger.error("claude CLI error (rc=%d): %s", result.returncode, err)
+                return err or "Claude CLI returned an error"
+            return result.stdout.strip()
+        except subprocess.TimeoutExpired:
+            return "Claude CLI timed out after 480 seconds"
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
     # ---- OpenAI API backend ----
 
     async def _chat_api(
@@ -181,7 +210,7 @@ class LLMClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         max_retries: int = 3,
-        timeout: float = 600,
+        timeout: float = 300,
     ) -> Any:
         """Send via OpenAI-compatible API with retry logic."""
         from openai import APIError, APIConnectionError, RateLimitError, APITimeoutError

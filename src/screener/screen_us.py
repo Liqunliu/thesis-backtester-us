@@ -51,6 +51,7 @@ def screen_us_at_date(
     tiers = config.get_tiers()
     default_label = config.get_default_tier_label()
     exclude_rules = config.get_exclude_rules()
+    include_industries = config.get_include_rules()
     industry_cap = config.get_industry_cap()
 
     result = ScreenResult(cutoff_date=cutoff_date)
@@ -73,10 +74,9 @@ def screen_us_at_date(
     print(f"  Got indicators for {len(df)} stocks")
 
     # 3. Apply exclude rules (industry filtering)
+    industry_map = stock_list.set_index("ts_code")["industry"].to_dict()
+    df["industry"] = df["ts_code"].map(industry_map).fillna("")
     if exclude_rules:
-        # Merge industry info
-        industry_map = stock_list.set_index("ts_code")["industry"].to_dict()
-        df["industry"] = df["ts_code"].map(industry_map).fillna("")
         for rule in exclude_rules:
             field = rule.get("field", "")
             contains = rule.get("contains", [])
@@ -84,14 +84,25 @@ def screen_us_at_date(
                 pattern = "|".join(contains)
                 df = df[~df["industry"].str.contains(pattern, case=False, na=False)]
 
-    # 4. Compute US-specific factors inline
-    #    These are simplified versions of the factors/us/ modules
-    df = _compute_us_factors_inline(provider, df, cutoff_date)
+    # 3b. Apply include rules (filter DOWN to matching industries only)
+    if include_industries:
+        pattern = "|".join(include_industries)
+        before_include = len(df)
+        df = df[df["industry"].str.contains(pattern, case=False, na=False)]
+        print(f"  Include industries filter: {before_include} -> {len(df)} stocks")
 
-    # 5. Apply declarative filters (from YAML)
-    df = _apply_filters(df.copy(), filters)
+    # 4a. Apply cheap filters first (use bulk data: pe_ttm, pb, market_cap)
+    cheap_filters = [f for f in filters if f["field"] in df.columns]
+    df_cheap = _apply_filters(df.copy(), cheap_filters)
+    print(f"  After cheap filters (PE/PB/mktcap): {len(df_cheap)} stocks")
+
+    # 4b. Fetch financials only for survivors, compute expensive factors
+    df_cheap = _compute_us_factors_inline(provider, df_cheap, cutoff_date)
+
+    # 5. Apply all filters (including gross_margin, debt_to_equity, etc.)
+    df = _apply_filters(df_cheap.copy(), filters)
     result.after_basic_filter = len(df)
-    print(f"  After filters: {len(df)} stocks")
+    print(f"  After all filters: {len(df)} stocks")
 
     if df.empty:
         return result
@@ -192,8 +203,8 @@ def _compute_us_factors_inline(
     # Only compute if the scoring config references these fields
 
     need_fields = set()
-    # Check what the YAML scoring factors reference
-    for col in ["shareholder_yield", "owner_earnings_yield", "gg_quick", "roe_avg_3y"]:
+    for col in ["shareholder_yield", "owner_earnings_yield", "gg_quick",
+                "roe_avg_3y", "gross_margin_avg_3y", "debt_to_equity"]:
         if col not in df.columns:
             need_fields.add(col)
 
@@ -201,24 +212,63 @@ def _compute_us_factors_inline(
         return df
 
     import time
-    logger.info("Computing %d inline factors for %d stocks...", len(need_fields), len(df))
+    logger.info("Computing inline factors for %d stocks...", len(df))
+    print(f"  Fetching financials for {len(df)} stocks (may take several minutes)...")
 
     for idx, row in df.iterrows():
         ticker = row["ts_code"]
         try:
             cf = provider.fetch_cashflow(ticker)
             inc = provider.fetch_income(ticker)
+            bal = provider.fetch_balancesheet(ticker)
         except Exception:
             continue
 
         if cf.empty or inc.empty:
             continue
 
-        # Latest year
-        latest_cf = cf.sort_values("end_date").iloc[-1] if not cf.empty else {}
-        latest_inc = inc.sort_values("end_date").iloc[-1] if not inc.empty else {}
-        mv = row.get("total_mv", 0)
+        # Sort oldest→newest, use last 3 years where available
+        cf = cf.sort_values("end_date") if not cf.empty else cf
+        inc = inc.sort_values("end_date") if not inc.empty else inc
+        bal = bal.sort_values("end_date") if not bal.empty else bal
 
+        latest_cf = cf.iloc[-1] if not cf.empty else {}
+        latest_inc = inc.iloc[-1] if not inc.empty else {}
+        latest_bal = bal.iloc[-1] if not bal.empty else {}
+        mv = row.get("total_mv", 0)  # already in millions
+
+        # gross_margin_avg_3y
+        if "gross_margin_avg_3y" in need_fields and len(inc) >= 1:
+            rev_col, gp_col = "revenue", "gross_profit"
+            if rev_col in inc.columns and gp_col in inc.columns:
+                recent = inc.tail(3)
+                rev = pd.to_numeric(recent[rev_col], errors="coerce")
+                gp = pd.to_numeric(recent[gp_col], errors="coerce")
+                margins = (gp / rev * 100).dropna()
+                if len(margins) > 0:
+                    df.at[idx, "gross_margin_avg_3y"] = margins.mean()
+
+        # debt_to_equity
+        if "debt_to_equity" in need_fields and not bal.empty:
+            lt = pd.to_numeric(latest_bal.get("lt_debt", 0) or 0, errors="coerce")
+            st = pd.to_numeric(latest_bal.get("st_debt", 0) or 0, errors="coerce")
+            eq = pd.to_numeric(latest_bal.get("total_equity", None), errors="coerce")
+            if pd.notna(eq) and eq > 0:
+                df.at[idx, "debt_to_equity"] = (lt + st) / eq
+
+        # roe_avg_3y (use balance sheet ROE if not in bulk data)
+        if "roe_avg_3y" in need_fields and len(inc) >= 1:
+            if len(inc) >= 1 and not bal.empty:
+                roe_vals = []
+                for i in range(min(3, len(inc))):
+                    ni = pd.to_numeric(inc.iloc[-(i+1)].get("net_income", None), errors="coerce")
+                    eq_i = pd.to_numeric(bal.iloc[-1].get("total_equity", None), errors="coerce") if not bal.empty else None
+                    if pd.notna(ni) and pd.notna(eq_i) and eq_i > 0:
+                        roe_vals.append(ni / eq_i * 100)
+                if roe_vals:
+                    df.at[idx, "roe_avg_3y"] = sum(roe_vals) / len(roe_vals)
+
+        # mv in millions (from bulk fetch — already converted)
         if mv and mv > 0:
             ocf = abs(float(latest_cf.get("ocf", 0) or 0))
             capex = abs(float(latest_cf.get("capex", 0) or 0))
@@ -240,7 +290,7 @@ def _compute_us_factors_inline(
                 aa = ocf - capex + buybacks - divs - sbc
                 df.at[idx, "gg_quick"] = aa / mv * 100
 
-        time.sleep(0.05)
+        time.sleep(0.1)  # avoid Bloomberg rate limits
 
     return df
 

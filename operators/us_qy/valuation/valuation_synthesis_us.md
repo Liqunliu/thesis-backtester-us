@@ -1,8 +1,8 @@
 ---
 id: valuation_synthesis_us
-name: "Valuation & Synthesis (F4 Steps 1-6)"
+name: "Valuation & Synthesis (F4)"
 category: valuation
-tags: [f4, valuation, dcf, ddm, value-trap, safety-margin, scoring]
+tags: [f4, valuation, value-trap, safety-margin, scoring]
 data_needed: [income, balancesheet, cashflow]
 gate:
   exclude_industry: [Banks, Insurance]
@@ -15,19 +15,19 @@ outputs:
     desc: "Number of value trap checks triggered (0-5)"
   - field: value_trap_risk
     type: str
-    desc: "LOW (0 traps) / MEDIUM (1) / HIGH (>=2)"
+    desc: "LOW (0) / MEDIUM (1) / HIGH (>=2)"
   - field: value_trap_details
     type: str
-    desc: "List of triggered traps or 'None'"
+    desc: "Triggered traps or 'None'"
   - field: position_sizing
     type: str
     desc: "Standard / Reduced / Minimal"
   - field: intrinsic_value
     type: float
-    desc: "Composite intrinsic value estimate ($M market cap equivalent)"
+    desc: "Composite intrinsic value ($M)"
   - field: upside_pct
     type: float
-    desc: "Current price vs intrinsic value (%)"
+    desc: "Upside vs current market cap (%)"
   - field: recommendation
     type: str
     desc: "BUY / HOLD / WATCH / AVOID"
@@ -39,112 +39,92 @@ outputs:
     desc: "F4 sub-score (0-25)"
   - field: total_score
     type: float
-    desc: "F1 + F2 + F3 + F4 total (0-100)"
+    desc: "F1+F2+F3+F4 total (0-100)"
+  - field: valuation_weights
+    type: str
+    desc: "Composite weight breakdown"
 ---
 
-# F4: Valuation & Synthesis (Steps 1-6)
+# F4: Valuation & Synthesis
 
-Final factor — integrates all upstream analysis into a valuation and recommendation.
+Use pre-computed metrics from the **"Pre-Computed Quantitative Metrics"** section.
+Do NOT recalculate GG, AA, owner earnings, or Graham Number.
 
-## Step 1: Threshold Calculation
+## Step 1: Safety Margin
 
-```
-Rf = risk-free rate from data (US 10Y Treasury)
-Threshold II = max(5%, Rf + 3%)
-GG_primary = refined GG from F3
+Read from snapshot: `GG vs Threshold II (7.3%)`. This is your safety margin in pp.
 
-Safety margin = GG_primary - Threshold II
-```
+Position sizing:
+- margin > 3pp + HIGH credibility → Standard
+- margin > 1pp + MEDIUM credibility → Reduced
+- margin < 1pp OR LOW credibility → Minimal
 
 ## Step 2: Value Trap Screening (5 checks)
 
 | # | Trap | Trigger |
 |---|------|---------|
-| 1 | Cash flow deterioration | cash_surplus declining ≥2 consecutive years AND decline >15% |
-| 2 | Moat narrowing | moat_rating assessed as narrowing or technical layer disrupted |
-| 3 | Structural industry decline | terminal demand irreversibly shrinking (not cyclical) |
-| 4 | Weak distribution willingness | distribution_willingness = "Weak" |
-| 5 | Management destroying value | management_rating = "Destroying value" or "Observation" |
+| 1 | Cash flow deterioration | FCF declining ≥2 years AND >15% drop (check FCF History) |
+| 2 | Moat narrowing | moat_rating narrowing from prior chapters |
+| 3 | Structural decline | terminal demand shrinking (not cyclical) |
+| 4 | Weak distribution | distribution_willingness = "Weak" |
+| 5 | Management destroying value | management_rating negative |
 
-Assessment:
-- N=0 → LOW risk
-- N=1 → MEDIUM (flag risk but proceed)
-- N≥2 → HIGH (if GG > Threshold II × 1.5 → retain; else exclude)
+N=0 → LOW, N=1 → MEDIUM, N≥2 → HIGH
 
-## Step 3: Safety Margin & Position Sizing
+## Step 3: Intrinsic Value (4 methods)
 
-```
-Safety margin = GG - Threshold II
+### A. GG Perpetuity
+IV = AA_baseline / 0.09 (use AA from snapshot)
 
-Cyclicality adjustment (strong-cycle only):
-  Cycle bottom: Threshold -1% → wider margin
-  Cycle top: Threshold +2% → narrower margin
+### B. P/E Multiple
+Fair P/E = 1/(Rf + risk_premium). Risk premium: 3% (A), 4% (B), 5% (C).
+IV = Fair_PE × EPS × Shares
 
-Position sizing matrix:
-  margin > 3pp + HIGH credibility → Standard (full position)
-  margin > 1pp + MEDIUM credibility → Reduced
-  margin < 1pp OR LOW credibility → Minimal
-```
+### C. EV/EBITDA (debt-aware)
+Fair EV = EBITDA × sector_multiple (7-10x)
+IV = EV - Net_Debt (use Net Debt from snapshot)
 
-## Step 4: Base Valuation (multiple approaches)
+### D. Graham Number
+Already in snapshot. Compare vs current price.
 
-1. **GG-based perpetuity**: Intrinsic Value = AA / discount_rate
-2. **P/E multiple**: Compare observed vs fair P/E (Rf-adjusted, moat premium)
-3. **EV/EBITDA**: For capital-intensive businesses
-4. **P/FCF**: When GAAP earnings differ from cash generation
-5. **DDM**: Tax-adjusted dividend yield (15% US qualified)
+### Composite Weights
 
-Reconciliation: do approaches converge? If diverge > 20%, explain.
+| Method | Default | If D/E > 1.0 | If D/E > 2.0 |
+|--------|---------|-------------|-------------|
+| GG Perp | 30% | 25% | 20% |
+| P/E | 25% | 25% | 20% |
+| EV/EBITDA | 25% | 35% | 45% |
+| Graham | 20% | 15% | 15% |
 
-## Step 5: Price Target & Upside
+**CRITICAL**: High-debt companies need EV/EBITDA weight boosted — it's the only method that deducts debt.
 
-```
-Current market cap vs intrinsic value → upside/downside %
-Conservative target = Intrinsic × (1 - volatility adjustment)
-```
-
-## Step 6: Cross-Validation & Final
-
-- Do qualitative findings (D1-D6) support quantitative GG?
-- Contradictions between Agent A and Agent B? (red flag)
-- Integrate: GG + quality + moat + management → final recommendation
-
-## Scoring
+## Step 4: Score & Recommend
 
 | Condition | F4 Score |
 |-----------|---------|
 | Margin > 3pp + 0 traps + upside > 20% | 25 |
 | Margin > 1pp + ≤1 trap + upside > 10% | 20 |
-| Margin > 0 + manageable risks | 15 |
-| Margin near 0 or multiple traps | 10 |
-| Value trap HIGH or margin negative | 5 |
+| Margin > 0 + manageable | 15 |
+| Margin ≈ 0 or multiple traps | 10 |
+| HIGH trap risk or negative margin | 5 |
 
-## Total Score & Recommendation
+Total = F1 + F2 + F3 + F4. F3 score: use pre-computed GG (GG>10%=25, >7.3%=20, >5%=15).
 
-```
-Total = F1_score + F2_score + F3_score + F4_score
-
-Any VETO from F1A/F2/F3 → Total capped at 25, recommendation = AVOID
-
-≥85 → strong BUY
-70-84 → BUY
-50-69 → HOLD/WATCH
-30-49 → WATCH
-≤29 → AVOID
-```
+≥85 → strong BUY, 70-84 → BUY, 50-69 → HOLD, 30-49 → WATCH, ≤29 → AVOID
 
 ```json
 {
-  "gg_vs_threshold": 1.2,
+  "gg_vs_threshold": 4.2,
   "value_trap_count": 0,
   "value_trap_risk": "LOW",
   "value_trap_details": "None",
   "position_sizing": "Reduced",
-  "intrinsic_value": 65000.0,
-  "upside_pct": 15.3,
+  "intrinsic_value": 180000.0,
+  "upside_pct": 35.0,
   "recommendation": "BUY",
   "f4_conclusion": "PASS",
   "f4_score": 20,
-  "total_score": 75
+  "total_score": 78,
+  "valuation_weights": "GG 25%, P/E 25%, EV/EBITDA 35%, Graham 15% (D/E=1.1)"
 }
 ```
