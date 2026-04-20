@@ -1,0 +1,135 @@
+meta:
+  name: US Fallen Growth / Distressed Turnaround
+  version: "1.0"
+  description: >
+    Identifies survival probability and turning points for high-volatility
+    growth stocks that have crashed. Not for classic cyclicals (use us_cyclical)
+    or stable value (use us_qy). Targets fintech, proptech, high-growth SaaS
+    that may be at capitulation or approaching inflection.
+  market: US
+  provider: bloomberg
+
+paths:
+  operators_dir: operators/us_turnaround
+
+# --- Screening ---
+screening:
+  agent_batch:
+    ratio: 1.0
+    max: 20
+  filters:
+    - field: market_cap
+      min: 500              # $500M minimum (avoid micro-caps)
+
+# --- Chapter DAG ---
+framework:
+  chapters:
+    ch01:
+      name: "Survival Gate (Z-Score & Runway)"
+      depends: []
+      operators:
+        - survival_gate
+
+    ch02:
+      name: "Business Quality & Unit Economics"
+      depends: [ch01]
+      operators:
+        - business_quality
+
+    ch03:
+      name: "Sentiment & Positioning"
+      depends: [ch01]
+      operators:
+        - sentiment_positioning
+
+    ch04:
+      name: "Inflection Detection & Recommendation"
+      depends: [ch02, ch03]
+      snapshot_mode: financial
+      operators:
+        - inflection_synthesis
+
+# --- Synthesis ---
+synthesis:
+  thinking_steps:
+    - step: Survival Check
+      instruction: |
+        Binary gate: Can this company survive 18+ months?
+        Check from pre-computed metrics:
+        - Altman Z-Score: > 1.81 required (grey zone OK, distress = VETO)
+        - Cash runway: > 18 months required (if OCF negative)
+        - Debt maturity: no major maturities in next 12 months
+        If VETO -> score <= 20, recommendation = AVOID (bankruptcy risk)
+
+    - step: Inflection Assessment
+      instruction: |
+        For surviving companies, assess turning point:
+        TROUGH signals (bullish):
+        - Revenue re-accelerating (trajectory = "accelerating")
+        - Gross margin expanding (direction = "expanding")
+        - P/S below 2-year median
+        - Insider buying cluster (if EDGAR available)
+        - OCF turning positive or losses narrowing
+
+        PEAK signals (bearish):
+        - Revenue decelerating
+        - Gross margin compressing
+        - P/S > 3x historical median
+        - Insider selling
+        - OCF deteriorating
+
+    - step: Scoring
+      instruction: |
+        Score 0-100:
+        Survival (0-30): Z-score zone + cash runway
+        Business quality (0-25): Revenue growth + gross margin trend + unit economics
+        Sentiment (0-20): Short interest, insider activity, institutional flow
+        Inflection (0-25): How many trough/peak signals confirmed?
+
+        >= 75: BUY (trough confirmed + survives + quality improving)
+        60-74: WATCH (potential trough but unconfirmed)
+        40-59: HOLD (surviving but no clear inflection)
+        < 40: AVOID (distress or peak)
+
+  scoring:
+    anchors:
+      - range: "75-100"
+        profile: "Z-score safe + revenue accelerating + gross margin expanding + P/S compressed + insider buying"
+      - range: "60-74"
+        profile: "Survives + some inflection signals but not confirmed"
+      - range: "40-59"
+        profile: "Survives but no clear direction, or mixed signals"
+      - range: "20-39"
+        profile: "Marginal survival or peak signals"
+      - range: "0-19"
+        profile: "Distress zone or confirmed peak with deteriorating fundamentals"
+
+  decision:
+    buy_threshold: 75
+    hold_range: [40, 74]
+    avoid_threshold: 39
+
+# --- Parameters ---
+parameters:
+  risk_free_rate: 0.043
+  z_score_safe: 2.99
+  z_score_grey: 1.81
+  min_cash_runway_months: 18
+  currency: USD
+  amounts_unit: millions
+
+# --- Backtest ---
+backtest:
+  start_date: "2020-06-30"
+  end_date: "2025-12-31"
+  interval: "6m"
+  top_n: 20
+  concurrency: 3
+  forward_windows: [30, 90, 180, 365]
+  benchmark: SPY
+
+# --- LLM ---
+llm:
+  model: ${LLM_MODEL:-sonnet}
+  max_tokens: 8192
+  temperature: 0.1

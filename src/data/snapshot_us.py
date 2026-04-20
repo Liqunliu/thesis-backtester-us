@@ -446,6 +446,80 @@ def _compute_quantitative_metrics(snap: USStockSnapshot) -> dict:
             metrics["gross_margin_latest"] = round(margins[0], 1)
             metrics["gross_margin_avg_3y"] = round(sum(margins[:3]) / len(margins[:3]), 1)
 
+    # --- Altman Z-Score (bankruptcy predictor) ---
+    if not bs.empty and revenue:
+        total_assets = _val(bs, "total_assets")
+        total_liabilities = _val(bs, "total_liabilities")
+        current_assets = _val(bs, "current_assets")
+        current_liabilities = _val(bs, "current_liabilities")
+        total_equity = _val(bs, "total_equity")
+        retained_earnings = None  # Not directly available; approximate
+        if total_assets and total_assets > 0:
+            wc = (current_assets or 0) - (current_liabilities or 0)
+            # Approximate retained earnings as equity - assumed paid-in capital
+            # Use total_equity as proxy (conservative)
+            re_proxy = total_equity if total_equity else 0
+
+            X1 = wc / total_assets  # Working capital / Total assets
+            X2 = re_proxy / total_assets  # Retained earnings / Total assets
+            X3 = (ebitda or 0) / total_assets  # EBIT / Total assets
+            X4 = (market_cap or 0) / total_liabilities if total_liabilities and total_liabilities > 0 else 0
+            X5 = revenue / total_assets  # Sales / Total assets
+
+            z_score = 1.2 * X1 + 1.4 * X2 + 3.3 * X3 + 0.6 * X4 + 1.0 * X5
+            metrics["altman_z_score"] = round(z_score, 2)
+            if z_score > 2.99:
+                metrics["altman_zone"] = "safe"
+            elif z_score > 1.81:
+                metrics["altman_zone"] = "grey"
+            else:
+                metrics["altman_zone"] = "distress"
+
+    # --- Cash burn rate & runway ---
+    if ocf is not None and ocf < 0:
+        cash = _val(bs, "cash_and_equivalents") if not bs.empty else None
+        if cash and cash > 0:
+            monthly_burn = abs(ocf) / 12
+            metrics["cash_burn_monthly"] = round(monthly_burn, 1)
+            metrics["cash_runway_months"] = round(cash / monthly_burn, 1)
+        metrics["ocf_negative"] = True
+    else:
+        metrics["ocf_negative"] = False
+
+    # --- Revenue growth (YoY and QoQ proxy) ---
+    if len(rev_vals) >= 2:
+        metrics["revenue_growth_yoy"] = round((rev_vals[0] / rev_vals[1] - 1) * 100, 1)
+    if len(rev_vals) >= 3:
+        metrics["revenue_growth_2y_cagr"] = round(((rev_vals[0] / rev_vals[2]) ** 0.5 - 1) * 100, 1)
+    if len(rev_vals) >= 5:
+        # Revenue trajectory: accelerating or decelerating?
+        recent_growth = (rev_vals[0] / rev_vals[1] - 1) if rev_vals[1] else 0
+        older_growth = (rev_vals[2] / rev_vals[3] - 1) if len(rev_vals) > 3 and rev_vals[3] else 0
+        if recent_growth > older_growth + 0.05:
+            metrics["revenue_trajectory"] = "accelerating"
+        elif recent_growth < older_growth - 0.05:
+            metrics["revenue_trajectory"] = "decelerating"
+        else:
+            metrics["revenue_trajectory"] = "stable"
+
+    # --- Price/Sales ---
+    if market_cap and rev_vals:
+        metrics["price_to_sales"] = round(market_cap / rev_vals[0], 2) if rev_vals[0] > 0 else None
+
+    # --- Gross margin trend ---
+    if gp_vals and rev_vals and len(gp_vals) >= 3:
+        gm_latest = gp_vals[0] / rev_vals[0] * 100 if rev_vals[0] > 0 else 0
+        gm_2y_ago = gp_vals[2] / rev_vals[2] * 100 if len(rev_vals) > 2 and rev_vals[2] > 0 else 0
+        if gm_latest and gm_2y_ago:
+            gm_change = gm_latest - gm_2y_ago
+            metrics["gross_margin_trend_2y"] = round(gm_change, 1)
+            if gm_change > 3:
+                metrics["gross_margin_direction"] = "expanding"
+            elif gm_change < -3:
+                metrics["gross_margin_direction"] = "compressing"
+            else:
+                metrics["gross_margin_direction"] = "stable"
+
     return metrics
 
 
