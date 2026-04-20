@@ -1,0 +1,128 @@
+meta:
+  name: US Growth Compounder
+  version: "1.0"
+  description: >
+    Growth-oriented strategy for high-growth compounders. Values revenue acceleration,
+    gross margin expansion, and market share gains over current profitability.
+    Targets SaaS, cloud, fintech, AI platform companies growing >20% with >40% GM.
+    Complements QY (value) and Cyclical (trough) strategies.
+  market: US
+  provider: bloomberg
+
+paths:
+  operators_dir: operators/us_growth
+
+# --- Screening ---
+screening:
+  agent_batch:
+    ratio: 1.0
+    max: 20
+  filters:
+    - field: market_cap
+      min: 2000              # $2B minimum (avoid speculative micro-caps)
+
+# --- Chapter DAG ---
+framework:
+  chapters:
+    ch01:
+      name: "Growth Quality Gate"
+      depends: []
+      operators:
+        - growth_quality_gate
+
+    ch02:
+      name: "TAM & Competitive Position"
+      depends: [ch01]
+      operators:
+        - tam_competitive_position
+
+    ch03:
+      name: "Capital Efficiency & Durability"
+      depends: [ch01]
+      operators:
+        - capital_efficiency
+
+    ch04:
+      name: "Growth Valuation & Recommendation"
+      depends: [ch02, ch03]
+      snapshot_mode: financial
+      operators:
+        - growth_valuation
+
+# --- Synthesis ---
+synthesis:
+  thinking_steps:
+    - step: Growth Gate Check
+      instruction: |
+        Verify growth quality from ch01:
+        - Revenue CAGR (2yr) must be > 15% to proceed
+        - Gross margin must be > 35%
+        - If both fail -> VETO, score <= 20
+        Use pre-computed metrics: revenue_growth_yoy, revenue_growth_2y_cagr,
+        gross_margin_latest, gross_margin_direction
+
+    - step: Rule of 40 Assessment
+      instruction: |
+        Rule of 40 = Revenue Growth % + Operating Margin %
+        > 40: Elite compounder
+        20-40: Solid growth
+        < 20: Growth not compensating for losses
+        From pre-computed: revenue_growth_yoy + (oper_income/revenue * 100)
+
+    - step: Growth-Adjusted Valuation
+      instruction: |
+        For growth stocks, use growth-adjusted metrics:
+        - PEG = PE / EPS Growth Rate (PEG < 1.5 = attractive)
+        - EV/Revenue vs Revenue Growth (EV/Rev < Growth%/10 = attractive)
+        - Forward P/S: Is revenue growth fast enough to grow into current valuation?
+        From pre-computed: price_to_sales, revenue_growth_yoy
+
+    - step: Final Recommendation
+      instruction: |
+        Score and recommend based on growth quality + TAM + efficiency + valuation.
+
+  scoring:
+    anchors:
+      - range: "80-100"
+        profile: "Elite compounder: >30% growth + >50% GM + Rule of 40 >60 + reasonable valuation"
+      - range: "65-79"
+        profile: "Strong growth: >20% + >40% GM + Rule of 40 >40 + fair valuation"
+      - range: "50-64"
+        profile: "Moderate growth or expensive valuation. Growth slowing or margins not expanding"
+      - range: "30-49"
+        profile: "Growth deceleration or unsustainable unit economics"
+      - range: "0-29"
+        profile: "Growth stalled, margins compressing, or extreme overvaluation"
+
+  decision:
+    buy_threshold: 65
+    hold_range: [50, 64]
+    watch_range: [30, 49]
+    avoid_threshold: 29
+
+# --- Parameters ---
+parameters:
+  risk_free_rate: 0.043
+  min_revenue_cagr: 0.15
+  min_gross_margin: 0.35
+  rule_of_40_elite: 60
+  rule_of_40_solid: 40
+  max_peg: 2.0
+  currency: USD
+  amounts_unit: millions
+
+# --- Backtest ---
+backtest:
+  start_date: "2020-06-30"
+  end_date: "2025-12-31"
+  interval: "6m"
+  top_n: 20
+  concurrency: 3
+  forward_windows: [30, 90, 180, 365]
+  benchmark: SPY
+
+# --- LLM ---
+llm:
+  model: ${LLM_MODEL:-sonnet}
+  max_tokens: 8192
+  temperature: 0.1

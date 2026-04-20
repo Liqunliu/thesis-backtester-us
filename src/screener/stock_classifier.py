@@ -283,7 +283,7 @@ STRATEGY_PATHS = {
     "cyclical": "strategies/us_cyclical/strategy.yaml",
     "cigar_butt": "strategies/us_cigar/strategy.yaml",
     "turnaround": "strategies/us_turnaround/strategy.yaml",
-    "growth": "strategies/us_qy/strategy.yaml",  # Fallback to QY for now
+    "growth": "strategies/us_growth/strategy.yaml",
 }
 
 
