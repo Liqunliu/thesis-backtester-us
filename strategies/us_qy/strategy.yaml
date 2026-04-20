@@ -13,6 +13,9 @@ paths:
 
 # --- Screening ---
 screening:
+  agent_batch:
+    ratio: 1.0    # analyze all candidates
+    max: 30
   exclude:
     - field: industry
       contains: [Banks, Insurance, Diversified Financial Services]
@@ -224,6 +227,6 @@ backtest:
 
 # --- LLM ---
 llm:
-  model: ${LLM_MODEL:-claude-sonnet-4-6}
+  model: ${LLM_MODEL:-opus}
   max_tokens: 8192
   temperature: 0.1

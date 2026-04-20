@@ -62,6 +62,10 @@ class USStockSnapshot:
     # SEC footnotes
     footnotes_md: str = ""
 
+    # Macro & sector cycle indicators
+    macro_indicators: dict = field(default_factory=dict)
+    sector_indicator: dict = field(default_factory=dict)
+
     # Pre-computed quantitative metrics (avoid LLM recalculation)
     computed_metrics: dict = field(default_factory=dict)
 
@@ -191,6 +195,23 @@ def create_us_snapshot(
         snap.warnings.append("No balance sheet data")
     if snap.cashflow.empty:
         snap.warnings.append("No cash flow data")
+
+    # Macro & sector indicators (optional, non-blocking)
+    try:
+        if hasattr(provider, "fetch_macro_snapshot"):
+            snap.macro_indicators = provider.fetch_macro_snapshot()
+            if snap.macro_indicators:
+                snap.data_sources.append("macro")
+    except Exception as e:
+        logger.warning("Macro indicators unavailable: %s", e)
+
+    try:
+        if hasattr(provider, "fetch_sector_indicator") and snap.industry:
+            snap.sector_indicator = provider.fetch_sector_indicator(snap.industry)
+            if snap.sector_indicator:
+                snap.data_sources.append("sector_indicator")
+    except Exception as e:
+        logger.warning("Sector indicator unavailable for %s: %s", snap.industry, e)
 
     # EDGAR footnotes (optional, non-blocking)
     try:
@@ -671,6 +692,54 @@ def us_snapshot_to_markdown(snap: USStockSnapshot, blind_mode: bool = False) -> 
         lines.append("|---------|----------------|")
         for _, row in div.iterrows():
             lines.append(f"| {row.get('ex_date', 'N/A')} | ${row.get('amount', 0):.4f} |")
+        lines.append("")
+
+    # Macro Environment
+    if snap.macro_indicators:
+        m = snap.macro_indicators
+        lines.append("## Macro Environment")
+        if m.get("us_10y") is not None:
+            lines.append(f"- **US 10Y Yield**: {m['us_10y']:.2f}%")
+        if m.get("us_2y") is not None:
+            lines.append(f"- **US 2Y Yield**: {m['us_2y']:.2f}%")
+        if m.get("yield_curve_slope") is not None:
+            status = "INVERTED" if m.get("yield_curve_inverted") else "Normal"
+            lines.append(f"- **Yield Curve (10Y-2Y)**: {m['yield_curve_slope']:.3f}% ({status})")
+        if m.get("credit_spread_ig") is not None:
+            lines.append(f"- **IG Credit Spread**: {m['credit_spread_ig']:.0f}bp")
+        if m.get("credit_spread_hy") is not None:
+            lines.append(f"- **HY Credit Spread**: {m['credit_spread_hy']:.0f}bp")
+        if m.get("pmi_mfg") is not None:
+            status = "Expansion" if m["pmi_mfg"] > 50 else "Contraction"
+            lines.append(f"- **ISM Manufacturing PMI**: {m['pmi_mfg']:.1f} ({status})")
+        if m.get("vix") is not None:
+            lines.append(f"- **VIX**: {m['vix']:.1f}")
+        if m.get("fed_funds") is not None:
+            lines.append(f"- **Fed Funds Rate**: {m['fed_funds']:.2f}%")
+        if m.get("capacity_util") is not None:
+            lines.append(f"- **Capacity Utilization**: {m['capacity_util']:.1f}%")
+        if m.get("consumer_conf") is not None:
+            lines.append(f"- **Consumer Confidence**: {m['consumer_conf']:.1f}")
+        if m.get("pmi_new_orders") is not None:
+            lines.append(f"- **ISM New Orders**: {m['pmi_new_orders']:.1f}")
+        if m.get("pmi_inventories") is not None:
+            lines.append(f"- **ISM Inventories**: {m['pmi_inventories']:.1f}")
+        if m.get("orders_inventory_spread") is not None:
+            lines.append(f"- **Orders-Inventory Spread**: {m['orders_inventory_spread']:+.1f} ({m.get('inventory_cycle_phase', 'N/A')})")
+        lines.append("")
+
+    # Sector Cycle Indicator
+    if snap.sector_indicator:
+        si = snap.sector_indicator
+        lines.append("## Sector Cycle Indicator")
+        lines.append(f"- **Indicator**: {si.get('name', 'N/A')} ({si.get('ticker', '')})")
+        if si.get("last") is not None:
+            lines.append(f"- **Current**: {si['last']:.2f}")
+        if si.get("52w_high") is not None:
+            lines.append(f"- **52-Week Range**: {si['52w_low']:.2f} - {si['52w_high']:.2f}")
+        if si.get("52w_percentile") is not None:
+            lines.append(f"- **52-Week Percentile**: {si['52w_percentile']:.1%}")
+            lines.append(f"- **Trough Score**: {si.get('trough_score', 0):.3f} (1.0 = deep trough, 0.0 = peak)")
         lines.append("")
 
     # Pre-Computed Quantitative Metrics

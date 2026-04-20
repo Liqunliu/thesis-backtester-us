@@ -236,8 +236,7 @@ def step_eval_us(config: "StrategyConfig") -> Path:
 
 
 def _collect_us_forward_returns(slices: List[EvalSlice], bt_dir: Path):
-    """Collect forward returns using yfinance (works without Bloomberg)."""
-    import yfinance as yf
+    """Collect forward returns using Bloomberg (primary) or yfinance (fallback)."""
 
     outcomes_dir = bt_dir / "outcomes_cache"
     outcomes_dir.mkdir(parents=True, exist_ok=True)
@@ -246,6 +245,15 @@ def _collect_us_forward_returns(slices: List[EvalSlice], bt_dir: Path):
     done = 0
     t0 = time.time()
     print(f"\nCollecting forward returns ({total} stocks)...")
+
+    # Try Bloomberg first
+    provider = None
+    try:
+        from src.data.bloomberg.provider import BloombergProvider
+        provider = BloombergProvider()
+        print("  Using Bloomberg for price history")
+    except Exception:
+        print("  Bloomberg unavailable, trying yfinance")
 
     for sl in slices:
         codes = sl.candidates["ts_code"].tolist()
@@ -264,29 +272,52 @@ def _collect_us_forward_returns(slices: List[EvalSlice], bt_dir: Path):
                 continue
 
             try:
-                # Fetch 13 months of price data after cutoff
+                hist = None
                 start = sl.cutoff_date
                 end_dt = pd.to_datetime(start) + pd.Timedelta(days=400)
-                hist = yf.download(ticker, start=start, end=end_dt.strftime("%Y-%m-%d"),
-                                   progress=False)
-                if hist.empty or len(hist) < 2:
+
+                if provider is not None:
+                    # Bloomberg path
+                    prices = provider.fetch_price_history(ticker, years=7)
+                    if not prices.empty:
+                        date_col = "trade_date" if "trade_date" in prices.columns else "date"
+                        prices[date_col] = pd.to_datetime(prices[date_col])
+                        mask = (prices[date_col] >= start) & (prices[date_col] <= end_dt)
+                        hist = prices[mask].sort_values(date_col).reset_index(drop=True)
+
+                if hist is None or hist.empty:
+                    # yfinance fallback
+                    try:
+                        import yfinance as yf
+                        hist = yf.download(ticker, start=start,
+                                           end=end_dt.strftime("%Y-%m-%d"),
+                                           progress=False)
+                    except Exception:
+                        pass
+
+                if hist is None or hist.empty or len(hist) < 2:
                     continue
 
-                p0 = float(hist["Close"].iloc[0])
+                # Normalize column name
+                close_col = "close" if "close" in hist.columns else "Close"
+                if close_col not in hist.columns:
+                    continue
+
+                p0 = float(hist[close_col].iloc[0])
                 outcome = {"cutoff_price": p0}
 
                 for months, key in [(1, "return_1m"), (3, "return_3m"),
                                      (6, "return_6m"), (12, "return_12m")]:
                     target_days = months * 21  # trading days
                     if len(hist) > target_days:
-                        p1 = float(hist["Close"].iloc[target_days])
+                        p1 = float(hist[close_col].iloc[target_days])
                         outcome[key] = (p1 - p0) / p0
                     else:
                         outcome[key] = None
 
                 # Max drawdown (6m)
                 if len(hist) > 126:
-                    window = hist["Close"].iloc[:126]
+                    window = hist[close_col].iloc[:126]
                     peak = window.expanding().max()
                     dd = ((window - peak) / peak).min()
                     outcome["max_drawdown_6m"] = float(dd)
@@ -297,11 +328,14 @@ def _collect_us_forward_returns(slices: List[EvalSlice], bt_dir: Path):
             except Exception:
                 pass
 
-            if done % 50 == 0 or done == total:
+            if done % 20 == 0 or done == total:
                 elapsed = time.time() - t0
                 print(f"  [{done}/{total}] {elapsed:.0f}s")
 
         cache_path.write_text(json.dumps(cache, default=str))
+
+    if provider:
+        provider.cleanup()
 
     print(f"  Done: {done} stocks, {time.time()-t0:.0f}s")
 
@@ -322,20 +356,46 @@ def _evaluate_us_baselines(
         "top5": {"label": "Top 5 by Score", "returns_6m": []},
     }
 
-    # SPY benchmark
+    # SPY benchmark — try Bloomberg first, then yfinance
+    spy_dates = [sl.cutoff_date for sl in slices]
+    spy_provider = None
     try:
-        import yfinance as yf
-        spy_dates = [sl.cutoff_date for sl in slices]
-        for date in spy_dates:
-            end_dt = pd.to_datetime(date) + pd.Timedelta(days=200)
-            hist = yf.download("SPY", start=date, end=end_dt.strftime("%Y-%m-%d"),
-                               progress=False)
-            if len(hist) > 126:
-                p0 = float(hist["Close"].iloc[0])
-                p1 = float(hist["Close"].iloc[126])
-                baselines["spy"]["returns_6m"].append((p1 - p0) / p0)
+        from src.data.bloomberg.provider import BloombergProvider
+        spy_provider = BloombergProvider()
     except Exception:
         pass
+
+    for date in spy_dates:
+        try:
+            hist = None
+            end_dt = pd.to_datetime(date) + pd.Timedelta(days=200)
+
+            if spy_provider:
+                prices = spy_provider.fetch_price_history("SPY", years=7)
+                if not prices.empty:
+                    date_col = "trade_date" if "trade_date" in prices.columns else "date"
+                    prices[date_col] = pd.to_datetime(prices[date_col])
+                    mask = (prices[date_col] >= date) & (prices[date_col] <= end_dt)
+                    hist = prices[mask].sort_values(date_col).reset_index(drop=True)
+
+            if hist is None or hist.empty:
+                try:
+                    import yfinance as yf
+                    hist = yf.download("SPY", start=date,
+                                       end=end_dt.strftime("%Y-%m-%d"), progress=False)
+                except Exception:
+                    pass
+
+            if hist is not None and len(hist) > 126:
+                close_col = "close" if "close" in hist.columns else "Close"
+                p0 = float(hist[close_col].iloc[0])
+                p1 = float(hist[close_col].iloc[126])
+                baselines["spy"]["returns_6m"].append((p1 - p0) / p0)
+        except Exception:
+            pass
+
+    if spy_provider:
+        spy_provider.cleanup()
 
     for sl in slices:
         # Screen pool: all candidates with outcomes

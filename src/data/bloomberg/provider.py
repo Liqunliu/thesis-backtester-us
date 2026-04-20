@@ -477,6 +477,139 @@ class BloombergProvider:
         self._cache.put(ts_code, "holders", out)
         return out
 
+    # ---- Macro & Sector Indicators ----
+
+    # Bloomberg tickers for cycle indicators
+    _SECTOR_INDICATORS = {
+        "Oil & Gas": {"name": "WTI Crude Oil", "ticker": "CL1 Comdty"},
+        "Semiconductor": {"name": "PHLX Semiconductor", "ticker": "SOX Index"},
+        "Mining": {"name": "Copper", "ticker": "HG1 Comdty"},
+        "Steel": {"name": "Hot-Rolled Steel", "ticker": "HRA Comdty"},
+        "Chemicals": {"name": "S&P Chemicals", "ticker": "S5CHEM Index"},
+        "Airlines": {"name": "JETS ETF", "ticker": "JETS US Equity"},
+        "Auto": {"name": "S&P Auto", "ticker": "S5AUTO Index"},
+    }
+
+    _MACRO_INDICATORS = {
+        "us_10y": {"name": "US 10Y Treasury Yield", "ticker": "USGG10YR Index"},
+        "us_2y": {"name": "US 2Y Treasury Yield", "ticker": "USGG2YR Index"},
+        "credit_spread_ig": {"name": "US IG Credit Spread", "ticker": "LUACOAS Index"},
+        "credit_spread_hy": {"name": "US HY Credit Spread", "ticker": "LF98OAS Index"},
+        "pmi_mfg": {"name": "ISM Manufacturing PMI", "ticker": "NAPMPMI Index"},
+        "pmi_new_orders": {"name": "ISM New Orders", "ticker": "NAPMNEWO Index"},
+        "pmi_inventories": {"name": "ISM Inventories", "ticker": "NAPMINV Index"},
+        "fed_funds": {"name": "Fed Funds Rate", "ticker": "FDTR Index"},
+        "capacity_util": {"name": "Capacity Utilization", "ticker": "IP CAPUTL Index"},
+        "consumer_conf": {"name": "Consumer Confidence", "ticker": "CONCCONF Index"},
+        "vix": {"name": "VIX", "ticker": "VIX Index"},
+        "spy": {"name": "S&P 500 ETF", "ticker": "SPY US Equity"},
+    }
+
+    def fetch_macro_snapshot(self) -> dict:
+        """Fetch macro indicators: yield curve, credit spreads, PMI, VIX.
+
+        Returns dict with current values for cycle analysis.
+        Cached for 1 day.
+        """
+        cached = self._cache.get("_MACRO", "macro_snapshot")
+        if cached is not None:
+            logger.debug("Cache hit: macro_snapshot")
+            return cached
+
+        client = self._ensure_client()
+        result = {}
+
+        # Fetch all macro indicators
+        securities = [v["ticker"] for v in self._MACRO_INDICATORS.values()]
+        keys = list(self._MACRO_INDICATORS.keys())
+
+        try:
+            df = client._terminal_reference_request(
+                securities, ["PX_LAST"]
+            )
+            if not df.empty:
+                # Map by security name (Bloomberg may return in different order)
+                ticker_to_key = {v["ticker"]: k for k, v in self._MACRO_INDICATORS.items()}
+                for _, row in df.iterrows():
+                    sec = row.get("security", "")
+                    key = ticker_to_key.get(sec)
+                    if key and pd.notna(row.get("PX_LAST")):
+                        result[key] = float(row["PX_LAST"])
+        except Exception as e:
+            logger.warning("Macro reference request failed: %s", e)
+
+        # Derived signals
+        if "us_10y" in result and "us_2y" in result:
+            result["yield_curve_slope"] = round(result["us_10y"] - result["us_2y"], 3)
+            result["yield_curve_inverted"] = result["yield_curve_slope"] < 0
+
+        # Inventory cycle signal: New Orders - Inventories spread
+        if "pmi_new_orders" in result and "pmi_inventories" in result:
+            spread = result["pmi_new_orders"] - result["pmi_inventories"]
+            result["orders_inventory_spread"] = round(spread, 1)
+            # Positive spread = restocking phase, negative = destocking
+            if spread > 5:
+                result["inventory_cycle_phase"] = "restocking"
+            elif spread > 0:
+                result["inventory_cycle_phase"] = "early_restocking"
+            elif spread > -5:
+                result["inventory_cycle_phase"] = "early_destocking"
+            else:
+                result["inventory_cycle_phase"] = "destocking"
+
+        self._cache.put("_MACRO", "macro_snapshot", result)
+        return result
+
+    def fetch_sector_indicator(self, industry: str) -> dict:
+        """Fetch sector-specific cycle indicator for an industry.
+
+        Returns dict with current price, 52-week range, and percentile.
+        Cached for 1 day.
+        """
+        # Match industry to indicator
+        indicator = None
+        for sector_key, ind in self._SECTOR_INDICATORS.items():
+            if sector_key.lower() in industry.lower():
+                indicator = ind
+                break
+
+        if indicator is None:
+            return {}
+
+        cache_key = f"sector_{indicator['ticker'].replace(' ', '_')}"
+        cached = self._cache.get("_SECTOR", cache_key)
+        if cached is not None:
+            return cached
+
+        client = self._ensure_client()
+        result = {"name": indicator["name"], "ticker": indicator["ticker"]}
+
+        try:
+            # Current price + 52-week high/low
+            fields = ["PX_LAST", "HIGH_52WEEK", "LOW_52WEEK"]
+            df = client._terminal_reference_request(
+                [indicator["ticker"]], fields
+            )
+            if not df.empty:
+                row = df.iloc[0]
+                last = float(row.get("PX_LAST", 0)) if pd.notna(row.get("PX_LAST")) else None
+                hi = float(row.get("HIGH_52WEEK", 0)) if pd.notna(row.get("HIGH_52WEEK")) else None
+                lo = float(row.get("LOW_52WEEK", 0)) if pd.notna(row.get("LOW_52WEEK")) else None
+
+                if last:
+                    result["last"] = last
+                if hi and lo and hi > lo:
+                    result["52w_high"] = hi
+                    result["52w_low"] = lo
+                    result["52w_percentile"] = round((last - lo) / (hi - lo), 3) if last else None
+                    # Inverted: low percentile = trough = high score
+                    result["trough_score"] = round(1.0 - result["52w_percentile"], 3) if result["52w_percentile"] is not None else None
+        except Exception as e:
+            logger.warning("Sector indicator fetch failed for %s: %s", indicator["ticker"], e)
+
+        self._cache.put("_SECTOR", cache_key, result)
+        return result
+
     # ---- EDGAR filing date integration ----
 
     def _add_ann_dates(self, df: pd.DataFrame, ticker: str) -> pd.DataFrame:
