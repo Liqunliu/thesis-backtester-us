@@ -34,9 +34,13 @@ CYCLICAL_INDUSTRIES = {
     "energy", "materials",
     # Sub-industries
     "oil", "gas", "petroleum", "semiconductor", "steel",
-    "aluminum", "mining", "chemicals", "auto", "airlines", "shipping",
+    "aluminum", "mining", "chemicals", "auto", "airlines",
     "construction", "paper", "forest", "copper", "metals",
-    "industrial", "aerospace", "defense",
+    # Shipping (tanker, dry bulk, container)
+    "shipping", "tanker", "marine", "dry bulk", "container",
+    "maritime", "freight", "ocean",
+    # Cyclical industrials (not all industrials)
+    "drilling", "offshore",
 }
 
 # Industries excluded from cigar butt NAV analysis

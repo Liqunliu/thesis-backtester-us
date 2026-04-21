@@ -482,12 +482,20 @@ class BloombergProvider:
     # Bloomberg tickers for cycle indicators
     _SECTOR_INDICATORS = {
         "Oil & Gas": {"name": "WTI Crude Oil", "ticker": "CL1 Comdty"},
+        "Energy": {"name": "WTI Crude Oil", "ticker": "CL1 Comdty"},
         "Semiconductor": {"name": "PHLX Semiconductor", "ticker": "SOX Index"},
         "Mining": {"name": "Copper", "ticker": "HG1 Comdty"},
+        "Copper": {"name": "Copper", "ticker": "HG1 Comdty"},
         "Steel": {"name": "Hot-Rolled Steel", "ticker": "HRA Comdty"},
+        "Aluminum": {"name": "Aluminum", "ticker": "LA1 Comdty"},
         "Chemicals": {"name": "S&P Chemicals", "ticker": "S5CHEM Index"},
         "Airlines": {"name": "JETS ETF", "ticker": "JETS US Equity"},
         "Auto": {"name": "S&P Auto", "ticker": "S5AUTO Index"},
+        # Shipping — different indicators for tanker vs dry bulk
+        "Shipping": {"name": "Baltic Dry Index ETF", "ticker": "BDRY US Equity"},
+        "Tanker": {"name": "WTI Crude Oil", "ticker": "CL1 Comdty"},  # tanker rates correlate with oil
+        "Marine": {"name": "Baltic Dry Index ETF", "ticker": "BDRY US Equity"},
+        "Dry Bulk": {"name": "Baltic Dry Index ETF", "ticker": "BDRY US Equity"},
     }
 
     _MACRO_INDICATORS = {

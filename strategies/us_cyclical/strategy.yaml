@@ -16,21 +16,53 @@ paths:
 # --- Screening ---
 screening:
   include_industries:
+    # Commodity cyclicals
     - Oil & Gas
-    - Semiconductor
+    - Mining
     - Steel
     - Aluminum
-    - Mining
-    - Chemicals
-    - Auto Manufacturers
-    - Airlines
-    - Shipping
-    - Construction
-    - Paper & Forest Products
     - Copper
+    - Chemicals
+    - Paper & Forest Products
+    # Shipping (extreme cyclicality — fleet supply/demand)
+    - Shipping
+    - Tanker
+    - Marine
+    - Dry Bulk
+    # Transport & equipment (GDP-sensitive)
+    - Airlines
+    - Auto Manufacturers
+    - Construction
+    - Semiconductor
+  # Additional tickers not in S&P 500 (shipping, mid-cap cyclicals)
+  # These get added to the screening universe alongside S&P 500
+  extra_tickers:
+    # Tanker shipping
+    - STNG     # Scorpio Tankers
+    - FRO      # Frontline
+    - INSW     # International Seaways
+    - DHT      # DHT Holdings
+    - TNK      # Teekay Tankers
+    - EURN     # Euronav (CMB.TECH)
+    # Dry bulk shipping
+    - GOGL     # Golden Ocean
+    - SBLK     # Star Bulk
+    - GNK      # Genco Shipping
+    - BDRY     # Breakwave Dry Bulk ETF (index proxy)
+    # Container shipping
+    - ZIM      # ZIM Integrated Shipping
+    - MATX     # Matson
+    # Other mid-cap cyclicals
+    - AA       # Alcoa (aluminum)
+    - CLF      # Cleveland-Cliffs (steel)
+    - X        # U.S. Steel
+    - ARCH     # Arch Resources (coal)
+    - BTU      # Peabody Energy (coal)
+    - RIG      # Transocean (offshore drilling)
+    - VAL      # Valaris (offshore drilling)
   filters:
     - field: market_cap
-      min: 1000             # $1B minimum (millions USD)
+      min: 500              # $500M minimum (smaller for shipping/mid-cap)
 
 # --- Chapter DAG ---
 # Linear dependency chain: C1 -> C2 -> C3 -> Synthesis
@@ -196,6 +228,6 @@ backtest:
 
 # --- LLM ---
 llm:
-  model: ${LLM_MODEL:-claude-sonnet-4-6}
+  model: ${LLM_MODEL:-sonnet}
   max_tokens: 8192
   temperature: 0.1

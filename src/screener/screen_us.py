@@ -56,11 +56,26 @@ def screen_us_at_date(
 
     result = ScreenResult(cutoff_date=cutoff_date)
 
-    # 1. Get universe
+    # 1. Get universe (S&P 500 + extra tickers from strategy config)
     stock_list = get_sp500()
     tickers = stock_list["ts_code"].tolist()
+
+    extra_tickers = config.raw.get("screening", {}).get("extra_tickers", [])
+    if extra_tickers:
+        new_tickers = [t for t in extra_tickers if t not in tickers]
+        if new_tickers:
+            extra_df = pd.DataFrame({
+                "ts_code": new_tickers,
+                "name": new_tickers,
+                "industry": ["Cyclical"] * len(new_tickers),
+                "list_status": ["L"] * len(new_tickers),
+                "list_date": [""] * len(new_tickers),
+            })
+            stock_list = pd.concat([stock_list, extra_df], ignore_index=True)
+            tickers = stock_list["ts_code"].tolist()
+
     result.total_stocks = len(tickers)
-    print(f"  Universe: {len(tickers)} S&P 500 stocks")
+    print(f"  Universe: {len(tickers)} stocks (S&P 500 + {len(extra_tickers)} extra)")
 
     # 2. Fetch indicator data for the cutoff date
     #    For each stock, get PE, PB, DY, market cap
