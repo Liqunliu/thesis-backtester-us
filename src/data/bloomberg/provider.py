@@ -499,16 +499,29 @@ class BloombergProvider:
     }
 
     _MACRO_INDICATORS = {
+        # US Rates & Credit
         "us_10y": {"name": "US 10Y Treasury Yield", "ticker": "USGG10YR Index"},
         "us_2y": {"name": "US 2Y Treasury Yield", "ticker": "USGG2YR Index"},
         "credit_spread_ig": {"name": "US IG Credit Spread", "ticker": "LUACOAS Index"},
         "credit_spread_hy": {"name": "US HY Credit Spread", "ticker": "LF98OAS Index"},
+        "fed_funds": {"name": "Fed Funds Rate", "ticker": "FDTR Index"},
+        # US Activity
         "pmi_mfg": {"name": "ISM Manufacturing PMI", "ticker": "NAPMPMI Index"},
         "pmi_new_orders": {"name": "ISM New Orders", "ticker": "NAPMNEWO Index"},
         "pmi_inventories": {"name": "ISM Inventories", "ticker": "NAPMINV Index"},
-        "fed_funds": {"name": "Fed Funds Rate", "ticker": "FDTR Index"},
         "capacity_util": {"name": "Capacity Utilization", "ticker": "IP CAPUTL Index"},
         "consumer_conf": {"name": "Consumer Confidence", "ticker": "CONCCONF Index"},
+        # US Inflation
+        "us_cpi_yoy": {"name": "US CPI YoY", "ticker": "CPI YOY Index"},
+        "us_ppi_yoy": {"name": "US PPI YoY", "ticker": "PPI YOY Index"},
+        # US Inventory Cycle
+        "wholesale_inv_chg": {"name": "US Wholesale Inventories MoM", "ticker": "MTIBCHNG Index"},
+        "inv_sales_ratio": {"name": "US Inventory/Sales Ratio", "ticker": "MTISISRS Index"},
+        # China (global manufacturing cycle)
+        "china_ppi_yoy": {"name": "China PPI YoY", "ticker": "CHPIYOY Index"},
+        "china_cpi_yoy": {"name": "China CPI YoY", "ticker": "CHCPIYOY Index"},
+        "china_pmi_mfg": {"name": "China Manufacturing PMI", "ticker": "CPMINDX Index"},
+        # Market
         "vix": {"name": "VIX", "ticker": "VIX Index"},
         "spy": {"name": "S&P 500 ETF", "ticker": "SPY US Equity"},
     }
@@ -555,7 +568,6 @@ class BloombergProvider:
         if "pmi_new_orders" in result and "pmi_inventories" in result:
             spread = result["pmi_new_orders"] - result["pmi_inventories"]
             result["orders_inventory_spread"] = round(spread, 1)
-            # Positive spread = restocking phase, negative = destocking
             if spread > 5:
                 result["inventory_cycle_phase"] = "restocking"
             elif spread > 0:
@@ -564,6 +576,25 @@ class BloombergProvider:
                 result["inventory_cycle_phase"] = "early_destocking"
             else:
                 result["inventory_cycle_phase"] = "destocking"
+
+        # Inflation cycle signal
+        if "us_ppi_yoy" in result and "us_cpi_yoy" in result:
+            ppi_cpi_spread = result["us_ppi_yoy"] - result["us_cpi_yoy"]
+            result["ppi_cpi_spread"] = round(ppi_cpi_spread, 2)
+            # PPI > CPI = producers squeezing margins (late cycle)
+            # PPI < CPI = producers have pricing power (early/mid cycle)
+
+        # China cycle signal (critical for commodity cyclicals)
+        if "china_ppi_yoy" in result:
+            china_ppi = result["china_ppi_yoy"]
+            if china_ppi < -3:
+                result["china_cycle_signal"] = "deep_deflation"    # commodity trough
+            elif china_ppi < 0:
+                result["china_cycle_signal"] = "deflation"          # trough forming
+            elif china_ppi < 3:
+                result["china_cycle_signal"] = "mild_inflation"     # early recovery
+            else:
+                result["china_cycle_signal"] = "strong_inflation"   # late cycle / peak
 
         self._cache.put("_MACRO", "macro_snapshot", result)
         return result

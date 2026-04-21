@@ -800,6 +800,23 @@ def us_snapshot_to_markdown(snap: USStockSnapshot, blind_mode: bool = False) -> 
             lines.append(f"- **ISM Inventories**: {m['pmi_inventories']:.1f}")
         if m.get("orders_inventory_spread") is not None:
             lines.append(f"- **Orders-Inventory Spread**: {m['orders_inventory_spread']:+.1f} ({m.get('inventory_cycle_phase', 'N/A')})")
+        if m.get("us_cpi_yoy") is not None:
+            lines.append(f"- **US CPI YoY**: {m['us_cpi_yoy']:.1f}%")
+        if m.get("us_ppi_yoy") is not None:
+            lines.append(f"- **US PPI YoY**: {m['us_ppi_yoy']:.1f}%")
+        if m.get("ppi_cpi_spread") is not None:
+            lines.append(f"- **PPI-CPI Spread**: {m['ppi_cpi_spread']:+.2f}pp")
+        if m.get("wholesale_inv_chg") is not None:
+            lines.append(f"- **Wholesale Inventories MoM**: {m['wholesale_inv_chg']:+.1f}%")
+        if m.get("inv_sales_ratio") is not None:
+            lines.append(f"- **Inventory/Sales Ratio**: {m['inv_sales_ratio']:.2f}")
+        if m.get("china_pmi_mfg") is not None:
+            status = "Expansion" if m["china_pmi_mfg"] > 50 else "Contraction"
+            lines.append(f"- **China Manufacturing PMI**: {m['china_pmi_mfg']:.1f} ({status})")
+        if m.get("china_ppi_yoy") is not None:
+            lines.append(f"- **China PPI YoY**: {m['china_ppi_yoy']:.1f}% ({m.get('china_cycle_signal', 'N/A')})")
+        if m.get("china_cpi_yoy") is not None:
+            lines.append(f"- **China CPI YoY**: {m['china_cpi_yoy']:.1f}%")
         lines.append("")
 
     # Sector Cycle Indicator
