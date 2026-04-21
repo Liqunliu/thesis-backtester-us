@@ -94,6 +94,10 @@ N=0 → LOW, N=1 → MEDIUM, N≥2 → HIGH
 ### A. GG Perpetuity
 IV = AA_baseline / 0.09 (use AA from snapshot)
 
+**CAP RULE**: If GG perpetuity IV > 2× current market cap, cap it at 2× market cap.
+Perpetuities amplify input errors — if the formula says 3x upside, the inputs are wrong,
+not the market. This prevents the CMCSA-type 145% overestimate.
+
 ### B. P/E Multiple
 Fair P/E = 1/(Rf + risk_premium). Risk premium: 3% (A), 4% (B), 5% (C).
 IV = Fair_PE × EPS × Shares
@@ -133,19 +137,37 @@ For stocks identified as cyclical in Step 0, **replace** the standard composite 
 Do NOT use GG perpetuity or P/E for cyclicals at trough — earnings are cyclically
 depressed and these methods will systematically undervalue the company.
 
-## Step 4: Score & Recommend
+## Step 4: Market Sanity Check
+
+Before scoring, apply these guardrails:
+
+1. **Individual method cap**: If ANY single method gives IV > 2× market cap, cap it at 2× market cap
+2. **Composite cap**: If composite IV > 1.5× market cap (upside > 50%), apply skepticism:
+   - The market is pricing in risks the financials don't show
+   - Auto-set position_sizing = "Minimal" regardless of other factors
+   - Flag: "High upside estimate — market may know something model doesn't"
+3. **Convergence check**: If methods diverge > 50%, use the LOWEST method as the anchor
+   (backtest shows low-upside estimates are more accurate than high-upside)
+
+## Step 5: Score & Recommend
 
 | Condition | F4 Score |
 |-----------|---------|
-| Margin > 3pp + 0 traps + upside > 20% | 25 |
-| Margin > 1pp + ≤1 trap + upside > 10% | 20 |
+| Margin > 3pp + 0 traps + upside 10-50% | 25 |
+| Margin > 1pp + ≤1 trap + upside 5-50% | 20 |
 | Margin > 0 + manageable | 15 |
 | Margin ≈ 0 or multiple traps | 10 |
-| HIGH trap risk or negative margin | 5 |
+| HIGH trap risk or negative margin or upside > 100% | 5 |
 
 Total = F1 + F2 + F3 + F4. F3 score: use pre-computed GG (GG>10%=25, >7.3%=20, >5%=15).
 
 ≥85 → strong BUY, 70-84 → BUY, 50-69 → HOLD, 30-49 → WATCH, ≤29 → AVOID
+
+**UPSIDE SKEPTICISM RULE**: Backtest shows upside 0-10% has 86% win rate,
+while upside >40% has 50% win rate. If estimated upside > 50%:
+- Position = Minimal (not Standard/Reduced)
+- Conviction = LOW
+- Add note: "High upside estimate historically unreliable"
 
 ```json
 {
