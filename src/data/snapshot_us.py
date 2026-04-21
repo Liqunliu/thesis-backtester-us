@@ -408,6 +408,55 @@ def _compute_quantitative_metrics(snap: USStockSnapshot) -> dict:
     metrics["fcf_history"] = fcf_history
     metrics["fcf_positive_years"] = sum(1 for f in fcf_history if f > 0)
 
+    # --- Cyclical indicators (revenue position vs 5yr range) ---
+    if rev_vals and len(rev_vals) >= 3:
+        rev_peak = max(rev_vals)
+        rev_trough = min(rev_vals)
+        rev_current = rev_vals[0]
+        if rev_peak > 0:
+            metrics["revenue_vs_peak_pct"] = round(rev_current / rev_peak * 100, 1)
+            metrics["revenue_5y_peak"] = round(rev_peak, 1)
+            metrics["revenue_5y_trough"] = round(rev_trough, 1)
+            # Cycle position: how far from peak
+            if rev_current < rev_peak * 0.70:
+                metrics["cycle_position_revenue"] = "deep_trough"
+            elif rev_current < rev_peak * 0.85:
+                metrics["cycle_position_revenue"] = "trough"
+            elif rev_current < rev_peak * 0.95:
+                metrics["cycle_position_revenue"] = "mid_cycle"
+            else:
+                metrics["cycle_position_revenue"] = "near_peak"
+
+        # Revenue coefficient of variation (cyclicality measure)
+        if len(rev_vals) >= 3:
+            import statistics
+            rev_mean = statistics.mean(rev_vals)
+            if rev_mean > 0:
+                rev_cv = statistics.stdev(rev_vals) / rev_mean
+                metrics["revenue_cv"] = round(rev_cv * 100, 1)
+
+    # --- Normalized GG (5-year median, for cyclicals) ---
+    if len(ocf_vals) >= 3 and len(capex_vals) >= 3 and market_cap and market_cap > 0:
+        import statistics
+        median_ocf = statistics.median(ocf_vals)
+        median_capex = statistics.median([abs(c) for c in capex_vals])
+
+        # 3-year average payouts
+        div_vals_abs = [abs(d) for d in _vals(cf, "dividends_paid", 3) if d]
+        bb_vals_abs = [abs(b) for b in _vals(cf, "share_repurchases", 3) if b]
+        sbc_vals = _vals(cf, "sbc", 3)
+
+        avg_divs = sum(div_vals_abs) / max(len(div_vals_abs), 1) if div_vals_abs else 0
+        avg_bb = sum(bb_vals_abs) / max(len(bb_vals_abs), 1) if bb_vals_abs else 0
+        avg_sbc = sum(sbc_vals) / max(len(sbc_vals), 1) if sbc_vals else 0
+
+        normalized_aa = median_ocf - median_capex + avg_bb - avg_divs - avg_sbc
+        normalized_gg = normalized_aa / market_cap * 100
+        metrics["normalized_gg"] = round(normalized_gg, 2)
+        metrics["normalized_aa"] = round(normalized_aa, 1)
+        metrics["median_ocf"] = round(median_ocf, 1)
+        metrics["median_capex"] = round(median_capex, 1)
+
     # --- Debt metrics ---
     if not bs.empty:
         total_equity = _val(bs, "total_equity")
@@ -896,6 +945,20 @@ def us_snapshot_to_markdown(snap: USStockSnapshot, blind_mode: bool = False) -> 
             lines.append(f"- Graham Number: ${m['graham_number']:.2f}")
             lines.append(f"- EPS (TTM): ${m.get('eps_ttm', 0):.2f}")
             lines.append(f"- BVPS: ${m.get('bvps', 0):.2f}")
+            lines.append("")
+
+        # Cyclical Indicators
+        if m.get("revenue_cv") is not None and m["revenue_cv"] > 10:
+            lines.append("### Cyclical Indicators")
+            lines.append(f"- Revenue CV: {m['revenue_cv']:.1f}% ({'cyclical' if m['revenue_cv'] > 15 else 'moderate'})")
+            if m.get("revenue_vs_peak_pct") is not None:
+                lines.append(f"- Revenue vs 5Y Peak: {m['revenue_vs_peak_pct']:.1f}%")
+                lines.append(f"- Revenue 5Y Range: ${m.get('revenue_5y_trough',0):,.0f}M - ${m.get('revenue_5y_peak',0):,.0f}M")
+                lines.append(f"- Cycle Position (revenue): {m.get('cycle_position_revenue', 'N/A')}")
+            if m.get("normalized_gg") is not None:
+                lines.append(f"- **Normalized GG (5yr median)**: {m['normalized_gg']:.2f}%")
+                lines.append(f"- Normalized AA: ${m.get('normalized_aa',0):,.1f}M")
+                lines.append(f"- Median OCF: ${m.get('median_ocf',0):,.1f}M, Median CapEx: ${m.get('median_capex',0):,.1f}M")
             lines.append("")
 
         lines.append("")

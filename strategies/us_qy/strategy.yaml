@@ -145,6 +145,19 @@ synthesis:
         4. F3 refined return: f3_conclusion must be PASS (GG >= Threshold II 7.3%)
         If ANY veto triggers -> set total_score <= 25, recommendation = AVOID.
 
+        **CYCLICAL OVERRIDE**: If cyclicality_assessment = "strong-cycle" or "weak-cycle"
+        (from ch04), apply ALTERNATIVE veto rules instead of standard rules 2-4:
+        - SKIP F2 distribution capacity check (cyclicals have volatile FCF)
+        - SKIP coarse return R threshold (R is depressed at trough)
+        - SKIP GG threshold (GG uses current earnings which are cyclically depressed)
+        - INSTEAD check survival gates from pre-computed metrics:
+          a. Interest coverage > 1.5x (can service debt through trough)
+          b. Debt/Equity < 3.0 (not over-leveraged)
+          c. FCF positive in at least 2 of 5 years (business works when cycle is up)
+        - If survival gates pass AND cyclicality confirmed -> proceed to scoring
+        - If survival gates fail -> VETO (bankruptcy risk in downturn)
+        This prevents vetoing cyclical stocks at trough due to temporarily low earnings.
+
     - step: Factor Sub-Scoring
       instruction: |
         For PASS stocks, compute sub-scores:
@@ -157,6 +170,18 @@ synthesis:
           margin > 3pp + 0 traps = 25, margin > 1pp + <=1 trap = 15
         Total = F1 + F2 + F3 + F4
         NOTE: GG, R, AA, Graham Number are pre-computed in the snapshot. Use them directly.
+
+        **CYCLICAL SCORING ADJUSTMENT**: For cyclical stocks that passed via
+        the cyclical override (survival gates instead of GG threshold):
+        - F2 score: Use revenue_growth_yoy instead of R. Growth >15%=20, >5%=15, >0%=10
+        - F3 score: Check if revenue is below 5-year median (trough signal).
+          Revenue < 70% of 5yr peak = 25 (deep trough = high upside)
+          Revenue < 90% of 5yr peak = 20 (moderate trough)
+          Revenue near peak = 10 (late cycle, less upside)
+        - F4 score: Use EV/EBITDA exclusively (most reliable for cyclicals).
+          Below sector median = 20, at median = 15, above = 10
+        - Lower BUY threshold from 70 to 55 for cyclicals (less certainty but
+          higher potential return at trough)
 
     - step: Consistency Adjudication
       instruction: |

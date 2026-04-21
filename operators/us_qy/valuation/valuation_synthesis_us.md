@@ -50,14 +50,32 @@ outputs:
 Use pre-computed metrics from the **"Pre-Computed Quantitative Metrics"** section.
 Do NOT recalculate GG, AA, owner earnings, or Graham Number.
 
+## Step 0: Cyclical Detection
+
+Check `cyclicality` from ch04 (cyclicality_assessment operator).
+
+If cyclicality = "strong-cycle" or "weak-cycle":
+→ This stock is CYCLICAL. Apply **cyclical valuation rules** (see Step 3C below).
+→ Do NOT veto based on low GG or negative FCF — these are cyclically depressed.
+→ Instead, check survival: interest_coverage > 1.5x, debt_to_equity < 3.0.
+→ Use revenue position vs 5-year range as the primary signal.
+
+If cyclicality = "non-cycle":
+→ Standard QY valuation rules apply.
+
 ## Step 1: Safety Margin
 
 Read from snapshot: `GG vs Threshold II (7.3%)`. This is your safety margin in pp.
 
-Position sizing:
+For **non-cyclical** stocks:
 - margin > 3pp + HIGH credibility → Standard
 - margin > 1pp + MEDIUM credibility → Reduced
 - margin < 1pp OR LOW credibility → Minimal
+
+For **cyclical** stocks (override):
+- Survival gates pass + revenue at trough (<80% of 5yr peak) → Reduced
+- Survival gates pass + revenue mid-cycle → Minimal
+- Survival gates fail → AVOID (regardless of GG)
 
 ## Step 2: Value Trap Screening (5 checks)
 
@@ -97,6 +115,23 @@ Already in snapshot. Compare vs current price.
 | Graham | 20% | 15% | 15% |
 
 **CRITICAL**: High-debt companies need EV/EBITDA weight boosted — it's the only method that deducts debt.
+
+### Cyclical Valuation Override (Step 3C)
+
+For stocks identified as cyclical in Step 0, **replace** the standard composite with:
+
+1. **EV/EBITDA** (primary, 50% weight): Use mid-cycle EBITDA (5-year average), not current.
+   Fair EV = mid-cycle EBITDA × sector multiple. Equity = EV - Net Debt.
+
+2. **P/B** (secondary, 30% weight): Cyclicals mean-revert to book value.
+   P/B < 1.0 at trough = strong buy signal.
+   P/B > 2.5 at peak = sell signal.
+
+3. **Replacement value** (tertiary, 20% weight): What would it cost to rebuild these assets?
+   For capital-intensive cyclicals (mining, energy), assets have replacement value floors.
+
+Do NOT use GG perpetuity or P/E for cyclicals at trough — earnings are cyclically
+depressed and these methods will systematically undervalue the company.
 
 ## Step 4: Score & Recommend
 
