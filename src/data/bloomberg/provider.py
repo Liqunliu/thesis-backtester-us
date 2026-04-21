@@ -509,7 +509,7 @@ class BloombergProvider:
         "pmi_mfg": {"name": "ISM Manufacturing PMI", "ticker": "NAPMPMI Index"},
         "pmi_new_orders": {"name": "ISM New Orders", "ticker": "NAPMNEWO Index"},
         "pmi_inventories": {"name": "ISM Inventories", "ticker": "NAPMINV Index"},
-        "capacity_util": {"name": "Capacity Utilization", "ticker": "IP CAPUTL Index"},
+        "capacity_util": {"name": "Capacity Utilization", "ticker": "IPUTCAPU Index"},
         "consumer_conf": {"name": "Consumer Confidence", "ticker": "CONCCONF Index"},
         # US Inflation
         "us_cpi_yoy": {"name": "US CPI YoY", "ticker": "CPI YOY Index"},
@@ -518,8 +518,8 @@ class BloombergProvider:
         "wholesale_inv_chg": {"name": "US Wholesale Inventories MoM", "ticker": "MTIBCHNG Index"},
         "inv_sales_ratio": {"name": "US Inventory/Sales Ratio", "ticker": "MTISISRS Index"},
         # China (global manufacturing cycle)
-        "china_ppi_yoy": {"name": "China PPI YoY", "ticker": "CHPIYOY Index"},
-        "china_cpi_yoy": {"name": "China CPI YoY", "ticker": "CHCPIYOY Index"},
+        "china_ppi_yoy": {"name": "China PPI YoY", "ticker": "CHEFTYOY Index"},
+        "china_cpi_yoy": {"name": "China CPI YoY", "ticker": "CNCPIYOY Index"},
         "china_pmi_mfg": {"name": "China Manufacturing PMI", "ticker": "CPMINDX Index"},
         # Market
         "vix": {"name": "VIX", "ticker": "VIX Index"},
