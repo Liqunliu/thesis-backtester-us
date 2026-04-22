@@ -409,6 +409,8 @@ def _compute_quantitative_metrics(snap: USStockSnapshot) -> dict:
     metrics["fcf_positive_years"] = sum(1 for f in fcf_history if f > 0)
 
     # --- Cyclical indicators (revenue position vs 5yr range) ---
+    rev_vals = _vals(inc, "revenue", 5)
+    gp_vals = _vals(inc, "gross_profit", 5)
     if rev_vals and len(rev_vals) >= 3:
         rev_peak = max(rev_vals)
         rev_trough = min(rev_vals)
